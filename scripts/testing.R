@@ -13,19 +13,20 @@ import_meal(con, meal_name = "Frozen Yogurt Bark",                         csv_p
 
 add_user(
   con           = con,
-  name          = "John",
-  weight_kg     = 80,
-  height_cm     = 180,
-  age_years     = 30,
+  name          = "Daniel",
+  weight_kg     = 83,
+  height_cm     = 182,
+  age_years     = 34,
   gender        = "M",
-  goal          = "maintenance",
+  goal          = "recomponsition",
   work_type     = "sedentary",
-  exercise_days = 3
+  exercise_days = 6
 )
 
 DBI::dbGetQuery(con, "SELECT * FROM ingredients")
 DBI::dbGetQuery(con, "SELECT * FROM meals")
 DBI::dbGetQuery(con, "SELECT * FROM meal_ingredients")
+DBI::dbGetQuery(con, "SELECT * FROM users")
 
 get_meal_macros(con, meal_id = 5, servings = 3)
 
@@ -46,3 +47,4 @@ calculate_calorie_target(
 
 calculate_macro_targets(80, 180, 30, "M", "recomposition", "sedentary", 3)
 
+DBI::dbDisconnect(con)
