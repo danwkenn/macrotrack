@@ -30,7 +30,7 @@ DBI::dbGetQuery(con, "SELECT * FROM users")
 
 get_meal_macros(con, meal_id = 5, servings = 3)
 
-DBI::dbGetQuery(con, "SELECT * FROM users")
+DBI::dbGetQuery(con, "SELECT * FROM plans")
 get_user_targets(con, user_id = 1)
 
 unlink("test.db")

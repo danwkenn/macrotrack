@@ -11,10 +11,19 @@ meal_planner_ui <- function() {
     br(),
     uiOutput("meal_planner"),
     hr(),
-    uiOutput("daily_summary")
+    uiOutput("daily_summary"),hr(),
+    downloadButton("download_report", "Download Report", class = "btn-info")
   )
 }
 
+#' Import Meal Tab UI
+#'
+#' Returns the UI for the import meal tab, allowing the user to
+#' select a CSV file and import a meal into the database.
+#'
+#' @return A shiny tabPanel object.
+#'
+#' @export
 #' Import Meal Tab UI
 #'
 #' Returns the UI for the import meal tab, allowing the user to
@@ -31,14 +40,10 @@ import_meal_ui <- function() {
     ),
     fluidRow(
       column(4,
-        shinyFilesButton(
-          id       = "meal_csv",
-          label    = "Select CSV File",
-          title    = "Please select a meal CSV file",
-          multiple = FALSE
-        ),
-        br(), br(),
-        textOutput("csv_status")
+        fileInput("meal_csv", "Select CSV File",
+                  accept      = ".csv",
+                  buttonLabel = "Browse...",
+                  placeholder = "No file selected")
       )
     ),
     fluidRow(
@@ -235,3 +240,205 @@ build_meal_ui <- function() {
   )
 }
 
+#' Add Ingredient by Serving Tab UI
+#'
+#' Returns the UI for the add ingredient by serving tab, allowing the
+#' user to input nutrients per serving and a portion factor to convert
+#' to per-100g values for storage.
+#'
+#' @return A shiny tabPanel object.
+#'
+#' @export
+add_ingredient_by_serving_ui <- function() {
+  tabPanel("Add Ingredient (by serving)",
+    br(),
+    wellPanel(
+      p(strong("How this works:")),
+      p("Enter the serving size and macros as shown on the packet, then set the",
+        strong("portion factor"), "to define what one portion of this ingredient is."),
+      p("For example: a packet shows a serving of 3 falafel balls weighing 75g total.",
+        "Enter 75g as the serving size and the macros from the packet.",
+        "Then set the portion factor to", strong("0.333"), "— this tells the app that",
+        "one portion is one falafel ball (one third of the packet serving).",
+        "The app will convert everything to per-100g values automatically.")
+    ),
+    fluidRow(
+      column(4, textInput("serving_name", "Ingredient Name")),
+      column(4, textInput("serving_portion_name", "Portion Name (e.g. falafel ball, slice)"))
+    ),
+    hr(),
+    h4("Packet Serving"),
+    fluidRow(
+      column(3, numericInput("serving_size_g",   "Serving Size (g)",      value = NULL)),
+      column(3, numericInput("serving_calories", "Calories per serving",  value = NULL)),
+      column(3, numericInput("serving_protein",  "Protein per serving",   value = NULL))
+    ),
+    fluidRow(
+      column(3, numericInput("serving_carbs",    "Carbs per serving",     value = NULL)),
+      column(3, numericInput("serving_fat",      "Fat per serving",       value = NULL))
+    ),
+    hr(),
+    h4("Portion Factor"),
+    fluidRow(
+      column(3,
+        numericInput("portion_factor", "Portion factor",
+                     value = 1, min = 0.01, step = 0.01)
+      ),
+      column(5,
+        br(),
+        textOutput("portion_preview")
+      )
+    ),
+    br(),
+    actionButton("add_ingredient_serving_btn", "Add Ingredient", class = "btn-primary"),
+    br(), br(),
+    textOutput("add_ingredient_serving_status")
+  )
+}
+
+#' Build Plan Tab UI
+#'
+#' Returns the UI for the build plan tab, allowing the user to
+#' construct a meal plan from meals stored in the database.
+#'
+#' @return A shiny tabPanel object.
+#'
+#' @export
+build_plan_ui <- function() {
+  tabPanel("Build Plan",
+    br(),
+    fluidRow(
+      column(4, textInput("plan_name", "Plan Name")),
+      column(4, textInput("plan_description", "Description (optional)"))
+    ),
+    fluidRow(
+      column(3,
+        numericInput("plan_pct_to_plan", "% of targets to plan for",
+                     value = 100, min = 1, max = 100, step = 1)
+      )
+    ),
+    hr(),
+    h4("Add Meals"),
+    fluidRow(
+      column(4, uiOutput("build_plan_meal_select")),
+      column(2, textInput("plan_slot_name", "Slot Name (e.g. Breakfast)")),
+      column(2, numericInput("plan_meal_servings", "Servings",
+                             value = 1, min = 0.5, step = 0.5)),
+      column(2,
+        br(),
+        actionButton("add_to_plan_btn", "Add to Plan", class = "btn-success")
+      )
+    ),
+    br(),
+    tableOutput("build_plan_table"),
+    fluidRow(
+      column(2,
+        actionButton("clear_plan_btn", "Clear", class = "btn-warning")
+      )
+    ),
+    hr(),
+    tableOutput("build_plan_summary"),
+    br(),
+    actionButton("save_plan_btn", "Save Plan", class = "btn-primary"),
+    br(), br(),
+    textOutput("build_plan_status")
+  )
+}
+
+#' Remove Items Tab UI
+#'
+#' Returns the UI for the remove items tab, allowing the user to
+#' remove users, meals, ingredients, and plans, as well as clean
+#' unused items from the database.
+#'
+#' @return A shiny tabPanel object.
+#' @export
+remove_items_ui <- function() {
+  tabPanel("Remove Items",
+    br(),
+
+    # --- Remove User ---
+    h4("Remove User"),
+    fluidRow(
+      column(4, uiOutput("remove_user_select")),
+      column(2,
+        br(),
+        actionButton("remove_user_btn", "Remove User", class = "btn-danger")
+      )
+    ),
+    textOutput("remove_user_status"),
+
+    hr(),
+
+    # --- Remove Meal ---
+    h4("Remove Meal"),
+    fluidRow(
+      column(4, uiOutput("remove_meal_select")),
+      column(2,
+        br(),
+        actionButton("remove_meal_btn", "Remove Meal", class = "btn-danger")
+      )
+    ),
+    textOutput("remove_meal_status"),
+
+    hr(),
+
+    # --- Remove Ingredient ---
+    h4("Remove Ingredient"),
+    fluidRow(
+      column(4, uiOutput("remove_ingredient_select")),
+      column(2,
+        br(),
+        actionButton("remove_ingredient_btn", "Remove Ingredient", class = "btn-danger")
+      )
+    ),
+    textOutput("remove_ingredient_status"),
+
+    hr(),
+
+    # --- Remove Plan ---
+    h4("Remove Plan"),
+    fluidRow(
+      column(4, uiOutput("remove_plan_select")),
+      column(2,
+        br(),
+        actionButton("remove_plan_btn", "Remove Plan", class = "btn-danger")
+      )
+    ),
+    textOutput("remove_plan_status"),
+
+    hr(),
+
+    # --- Clean Ingredients ---
+    h4("Clean Ingredients"),
+    p("Removes any ingredients not associated with a meal."),
+    actionButton("clean_ingredients_btn", "Clean Ingredients", class = "btn-warning"),
+    textOutput("clean_ingredients_status"),
+
+    hr(),
+
+    # --- Clean Meals ---
+    h4("Clean Meals"),
+    p("Removes any meals not associated with a plan."),
+    actionButton("clean_meals_btn", "Clean Meals", class = "btn-warning"),
+    textOutput("clean_meals_status"),
+
+    br()
+  )
+}
+
+#' Settings Tab UI
+#'
+#' Returns the UI for the settings tab.
+#'
+#' @return A shiny tabPanel object.
+#' @export
+settings_ui <- function() {
+  tabPanel("Settings",
+    br(),
+    h4("Database"),
+    p("Download a copy of the current SQLite database file."),
+    downloadButton("download_db", "Download Database", class = "btn-info"),
+    br()
+  )
+}

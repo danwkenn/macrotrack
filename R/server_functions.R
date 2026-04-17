@@ -18,12 +18,19 @@ meal_planner_server <- function(input, output, session, con,
   output$meal_planner <- renderUI({
     req(con())
     tagList(
-      lapply(1:7, function(i) {
+      lapply(1:10, function(i) {
         fluidRow(
-          column(4,
+          column(3,
+            textInput(
+              inputId = paste0("slot_name_", i),
+              label   = paste("Slot", i, "Name"),
+              value   = ""
+            )
+          ),
+          column(3,
             selectizeInput(
               inputId  = paste0("meal_", i),
-              label    = paste("Slot", i),
+              label    = "Meal",
               choices  = c("None" = "", meal_choices()),
               selected = "",
               options  = list(placeholder = "Search for a meal...")
@@ -38,7 +45,7 @@ meal_planner_server <- function(input, output, session, con,
               step    = 0.5
             )
           ),
-          column(6,
+          column(4,
             tableOutput(paste0("macros_", i))
           )
         )
@@ -47,7 +54,7 @@ meal_planner_server <- function(input, output, session, con,
   })
 
   # Render macros for each slot
-  lapply(1:7, function(i) {
+  lapply(1:10, function(i) {
     output[[paste0("macros_", i)]] <- renderTable({
       req(con())
       meal_id  <- input[[paste0("meal_", i)]]
@@ -99,7 +106,7 @@ meal_planner_server <- function(input, output, session, con,
   # Render comparison table
   output$comparison_table <- renderTable({
     req(con())
-    summaries <- lapply(1:7, function(i) {
+    summaries <- lapply(1:10, function(i) {
       meal_id  <- input[[paste0("meal_", i)]]
       servings <- input[[paste0("servings_", i)]]
       if (is.null(meal_id) || meal_id == "") return(NULL)
@@ -133,6 +140,158 @@ meal_planner_server <- function(input, output, session, con,
                                as.character(round(diff, 1)))
     )
   })
+
+# Download report
+  output$download_report <- downloadHandler(
+    filename = function() {
+      paste0("meal_plan_", format(Sys.Date(), "%Y%m%d"), ".html")
+    },
+    content = function(file) {
+      req(con())
+
+      # --- User name ---
+      user_name <- if (!is.null(input$selected_user) && input$selected_user != "") {
+        user <- DBI::dbGetQuery(con(), "SELECT name FROM users WHERE user_id = ?",
+                                params = list(as.integer(input$selected_user)))
+        user$name
+      } else {
+        "Unknown"
+      }
+
+      # --- Targets table ---
+      full_targets <- c(input$target_calories, input$target_protein,
+                        input$target_carbs,    input$target_fat)
+      pct          <- input$pct_to_plan / 100
+      planning     <- round(full_targets * pct, 1)
+      in_reserve   <- round(full_targets * (1 - pct), 1)
+
+      # Collect planned totals
+      summaries <- lapply(1:10, function(i) {
+        meal_id  <- input[[paste0("meal_", i)]]
+        servings <- input[[paste0("servings_", i)]]
+        if (is.null(meal_id) || meal_id == "") return(NULL)
+        get_meal_macros(con(), as.integer(meal_id), servings)
+      })
+      summaries    <- Filter(Negate(is.null), summaries)
+      combined     <- data.table::rbindlist(summaries)
+      planned      <- combined[, .(
+        calories = sum(calories),
+        protein  = sum(protein),
+        carbs    = sum(carbs),
+        fat      = sum(fat)
+      )]
+      planned_vals <- round(c(planned$calories, planned$protein,
+                              planned$carbs,    planned$fat), 1)
+      diff         <- planned_vals - planning
+
+      targets_df <- data.frame(
+        Macro           = c("Calories", "Protein (g)", "Carbs (g)", "Fat (g)"),
+        Full.Target     = full_targets,
+        In.Reserve      = in_reserve,
+        Planning.Target = planning,
+        Planned         = planned_vals,
+        Difference      = ifelse(diff >= 0,
+                                 paste0("+", round(diff, 1)),
+                                 as.character(round(diff, 1)))
+      )
+
+      # --- Slots table ---
+      slots_df <- do.call(rbind, lapply(1:10, function(i) {
+        meal_id   <- input[[paste0("meal_", i)]]
+        slot_name <- input[[paste0("slot_name_", i)]]
+        servings  <- input[[paste0("servings_", i)]]
+        if (is.null(meal_id) || meal_id == "") return(NULL)
+        meal_name <- DBI::dbGetQuery(con(), "SELECT name FROM meals WHERE meal_id = ?",
+                                     params = list(as.integer(meal_id)))$name
+        data.frame(
+          slot_name = if (slot_name == "") paste("Slot", i) else slot_name,
+          meal_name = meal_name,
+          servings  = servings
+        )
+      }))
+
+      # --- Meal details list ---
+      meal_details <- lapply(1:10, function(i) {
+        meal_id   <- input[[paste0("meal_", i)]]
+        slot_name <- input[[paste0("slot_name_", i)]]
+        servings  <- input[[paste0("servings_", i)]]
+        if (is.null(meal_id) || meal_id == "") return(NULL)
+
+        meal_id_int <- as.integer(meal_id)
+        meal_name   <- DBI::dbGetQuery(con(), "SELECT name FROM meals WHERE meal_id = ?",
+                                       params = list(meal_id_int))$name
+
+        # Get ingredients for this meal
+        sql <- "
+          SELECT
+            i.name          AS ingredient,
+            mi.quantity     AS portions,
+            i.portion_size,
+            i.calories,
+            i.protein,
+            i.carbs,
+            i.fat
+          FROM meal_ingredients mi
+          JOIN ingredients i ON mi.ingredient_id = i.ingredient_id
+          WHERE mi.meal_id = ?
+        "
+        ingredients <- DBI::dbGetQuery(con(), sql, params = list(meal_id_int))
+
+        # Calculate macros per ingredient multiplied by servings
+        ingredients$calories <- round((ingredients$portion_size / 100) *
+                                        ingredients$calories *
+                                        ingredients$portions * servings, 1)
+        ingredients$protein  <- round((ingredients$portion_size / 100) *
+                                        ingredients$protein *
+                                        ingredients$portions * servings, 1)
+        ingredients$carbs    <- round((ingredients$portion_size / 100) *
+                                        ingredients$carbs *
+                                        ingredients$portions * servings, 1)
+        ingredients$fat      <- round((ingredients$portion_size / 100) *
+                                        ingredients$fat *
+                                        ingredients$portions * servings, 1)
+
+        # Add totals row
+        totals_row <- data.frame(
+          ingredient  = "Total",
+          portions    = NA,
+          portion_size = NA,
+          calories    = sum(ingredients$calories),
+          protein     = sum(ingredients$protein),
+          carbs       = sum(ingredients$carbs),
+          fat         = sum(ingredients$fat)
+        )
+        ingredients <- rbind(ingredients, totals_row)
+
+        # Drop portion_size from display
+        ingredients$portion_size <- NULL
+
+        list(
+          slot_name    = if (slot_name == "") paste("Slot", i) else slot_name,
+          meal_name    = meal_name,
+          servings     = servings,
+          ingredients  = ingredients
+        )
+      })
+      meal_details <- Filter(Negate(is.null), meal_details)
+
+      # --- Render the report ---
+      rmarkdown::render(
+        input       = "templates/meal_plan_report.Rmd",
+        output_file = file,
+        params      = list(
+          user_name   = user_name,
+          report_date = Sys.Date(),
+          targets     = targets_df,
+          pct_to_plan = pct,
+          slots       = slots_df,
+          meal_details = meal_details
+        ),
+        envir = new.env(parent = globalenv())
+      )
+    }
+  )
+
 }
 
 #' Import Meal Tab Server
@@ -145,22 +304,15 @@ meal_planner_server <- function(input, output, session, con,
 #' @param session Shiny session object.
 #' @param con A reactiveVal containing the database connection.
 #' @param meal_refresh A reactiveVal used to trigger meal list refresh.
-#' @param roots A named character vector of file system roots.
 #'
 #' @export
-import_meal_server <- function(input, output, session, con,
-                               meal_refresh, roots) {
+import_meal_server <- function(input, output, session, con, meal_refresh) {
 
   csv_path <- reactiveVal(NULL)
 
-  shinyFileChoose(input, "meal_csv", roots = roots, filetypes = c("csv"))
-
   observeEvent(input$meal_csv, {
-    path <- parseFilePaths(roots, input$meal_csv)
-    if (nrow(path) > 0) {
-      csv_path(as.character(path$datapath))
-      output$csv_status <- renderText(paste("Selected:", basename(csv_path())))
-    }
+    req(input$meal_csv)
+    csv_path(input$meal_csv$datapath)
   })
 
   observeEvent(input$import_meal_btn, {
@@ -482,4 +634,364 @@ build_meal_server <- function(input, output, session, con,
       output$build_meal_status <- renderText(paste("Error:", e$message))
     })
   })
+}
+
+#' Add Ingredient by Serving Tab Server
+#'
+#' Server logic for the add ingredient by serving tab. Converts
+#' packet serving data and portion factor into per-100g values
+#' and inserts the ingredient into the database.
+#'
+#' @param input Shiny input object.
+#' @param output Shiny output object.
+#' @param session Shiny session object.
+#' @param con A reactiveVal containing the database connection.
+#'
+#' @export
+add_ingredient_by_serving_server <- function(input, output, session, con) {
+
+  # Live preview of portion size in grams
+  output$portion_preview <- renderText({
+    req(input$serving_size_g, input$portion_factor)
+    portion_g <- round(input$serving_size_g * input$portion_factor, 1)
+    paste0("One portion = ", portion_g, "g")
+  })
+
+  observeEvent(input$add_ingredient_serving_btn, {
+    req(con())
+    req(input$serving_name != "")
+
+    tryCatch({
+
+      # Convert to per-100g values
+      portion_size <- input$serving_size_g * input$portion_factor
+      multiplier   <- 100 / input$serving_size_g
+
+      add_ingredient(
+        con          = con(),
+        name         = input$serving_name,
+        calories     = round(input$serving_calories * multiplier, 2),
+        protein      = round(input$serving_protein  * multiplier, 2),
+        carbs        = round(input$serving_carbs    * multiplier, 2),
+        fat          = round(input$serving_fat      * multiplier, 2),
+        portion_size = round(portion_size, 1),
+        portion_name = input$serving_portion_name
+      )
+
+      output$add_ingredient_serving_status <- renderText("Ingredient added successfully.")
+
+      # Reset form
+      updateTextInput(session,    "serving_name",         value = "")
+      updateTextInput(session,    "serving_portion_name", value = "")
+      updateNumericInput(session, "serving_size_g",       value = NA)
+      updateNumericInput(session, "serving_calories",     value = NA)
+      updateNumericInput(session, "serving_protein",      value = NA)
+      updateNumericInput(session, "serving_carbs",        value = NA)
+      updateNumericInput(session, "serving_fat",          value = NA)
+      updateNumericInput(session, "portion_factor",       value = 1)
+
+    }, error = function(e) {
+      output$add_ingredient_serving_status <- renderText(paste("Error:", e$message))
+    })
+  })
+}
+
+#' Build Plan Tab Server
+#'
+#' Server logic for the build plan tab, handling meal search,
+#' running meal list, macro summary, and saving the plan to the database.
+#'
+#' @param input Shiny input object.
+#' @param output Shiny output object.
+#' @param session Shiny session object.
+#' @param con A reactiveVal containing the database connection.
+#' @param meal_choices A reactive expression returning available meals.
+#' @param plan_refresh A reactiveVal used to trigger plan list refresh.
+#'
+#' @export
+build_plan_server <- function(input, output, session, con,
+                              meal_choices, plan_refresh) {
+
+  # Reactive data frame storing meals added so far
+  plan_meals <- reactiveVal(data.frame(
+    meal_id  = integer(),
+    name     = character(),
+    servings = numeric(),
+    calories = numeric(),
+    protein  = numeric(),
+    carbs    = numeric(),
+    fat      = numeric()
+  ))
+
+  # Render meal search dropdown
+  output$build_plan_meal_select <- renderUI({
+    req(con())
+    selectizeInput(
+      inputId = "build_plan_meal_id",
+      label   = "Search Meal",
+      choices = c("None" = "", meal_choices()),
+      options = list(placeholder = "Type to search...")
+    )
+  })
+
+  # Add meal to running list
+  observeEvent(input$add_to_plan_btn, {
+    req(con())
+    req(input$build_plan_meal_id != "")
+
+    servings <- input$plan_meal_servings
+    macros   <- get_meal_macros(con(), as.integer(input$build_plan_meal_id), servings)
+
+    new_row <- data.frame(
+      meal_id   = as.integer(input$build_plan_meal_id),
+      name      = macros$meal_name,
+      slot_name = input$plan_slot_name,
+      servings  = servings,
+      calories  = macros$calories,
+      protein   = macros$protein,
+      carbs     = macros$carbs,
+      fat       = macros$fat
+    )
+
+    plan_meals(rbind(plan_meals(), new_row))
+  })
+
+  # Clear plan
+  observeEvent(input$clear_plan_btn, {
+    plan_meals(data.frame(
+      meal_id  = integer(),
+      name     = character(),
+      servings = numeric(),
+      calories = numeric(),
+      protein  = numeric(),
+      carbs    = numeric(),
+      fat      = numeric()
+    ))
+  })
+
+  # Render running meal table
+  output$build_plan_table <- renderTable({
+    req(nrow(plan_meals()) > 0)
+    plan_meals()[, c("slot_name", "name", "servings", "calories", "protein", "carbs", "fat")]
+  })
+
+  # Render macro summary adjusted for pct_to_plan
+  output$build_plan_summary <- renderTable({
+    req(nrow(plan_meals()) > 0)
+
+    pct      <- input$plan_pct_to_plan / 100
+    totals   <- colSums(plan_meals()[, c("calories", "protein", "carbs", "fat")])
+
+    data.frame(
+      Macro           = c("Calories", "Protein (g)", "Carbs (g)", "Fat (g)"),
+      Total           = round(totals, 1),
+      In.Reserve      = round(totals * (1 - pct), 1),
+      Planning.Target = round(totals * pct, 1)
+    )
+  })
+
+  # Save plan to database
+  observeEvent(input$save_plan_btn, {
+    req(con())
+    req(input$plan_name != "")
+    req(nrow(plan_meals()) > 0)
+
+    tryCatch({
+
+      # Get next plan_id
+      max_plan_id <- DBI::dbGetQuery(con(), "SELECT MAX(plan_id) FROM plans")[[1]]
+      if (is.na(max_plan_id)) max_plan_id <- 0
+
+      # Insert plan
+      plans_df <- data.frame(
+        plan_id     = max_plan_id + 1,
+        name        = input$plan_name,
+        description = if (input$plan_description == "") NA_character_ else input$plan_description,
+        pct_to_plan = input$plan_pct_to_plan / 100
+      )
+      DBI::dbAppendTable(con(), "plans", plans_df)
+
+      # Insert plan_meals
+      plan_meals_df <- data.frame(
+        plan_id   = max_plan_id + 1,
+        slot_name = plan_meals()$slot_name,
+        meal_id   = plan_meals()$meal_id,
+        servings  = plan_meals()$servings
+      )
+      DBI::dbAppendTable(con(), "plan_meals", plan_meals_df)
+
+      output$build_plan_status <- renderText("Plan saved successfully.")
+      plan_refresh(plan_refresh() + 1)
+
+      # Reset form
+      plan_meals(data.frame(
+        meal_id  = integer(),
+        name     = character(),
+        servings = numeric(),
+        calories = numeric(),
+        protein  = numeric(),
+        carbs    = numeric(),
+        fat      = numeric()
+      ))
+      updateTextInput(session,    "plan_name",        value = "")
+      updateTextInput(session,    "plan_description", value = "")
+      updateNumericInput(session, "plan_pct_to_plan", value = 100)
+
+    }, error = function(e) {
+      output$build_plan_status <- renderText(paste("Error:", e$message))
+    })
+  })
+}
+
+#' Remove Items Tab Server
+#'
+#' Server logic for the remove items tab, handling removal of users,
+#' meals, ingredients, and plans, as well as cleaning unused items.
+#'
+#' @param input Shiny input object.
+#' @param output Shiny output object.
+#' @param session Shiny session object.
+#' @param con A reactiveVal containing the database connection.
+#' @param user_refresh A reactiveVal used to trigger user list refresh.
+#' @param meal_refresh A reactiveVal used to trigger meal list refresh.
+#' @param plan_refresh A reactiveVal used to trigger plan list refresh.
+#' @param ingredient_refresh A reactiveVal used to trigger ingredient list refresh.
+#'
+#' @export
+remove_items_server <- function(input, output, session, con,
+                                user_refresh, meal_refresh,
+                                plan_refresh, ingredient_refresh) {
+
+  # --- Render dropdowns ---
+  output$remove_user_select <- renderUI({
+    req(con())
+    user_refresh()
+    users <- DBI::dbGetQuery(con(), "SELECT user_id, name FROM users")
+    selectInput("remove_user_id", "Select User",
+                choices = c("None" = "", setNames(users$user_id, users$name)))
+  })
+
+  output$remove_meal_select <- renderUI({
+    req(con())
+    meal_refresh()
+    meals <- DBI::dbGetQuery(con(), "SELECT meal_id, name FROM meals")
+    selectInput("remove_meal_id", "Select Meal",
+                choices = c("None" = "", setNames(meals$meal_id, meals$name)))
+  })
+
+  output$remove_ingredient_select <- renderUI({
+    req(con())
+    ingredient_refresh()
+    ingredients <- DBI::dbGetQuery(con(), "SELECT ingredient_id, name FROM ingredients")
+    selectInput("remove_ingredient_id", "Select Ingredient",
+                choices = c("None" = "", setNames(ingredients$ingredient_id, ingredients$name)))
+  })
+
+  output$remove_plan_select <- renderUI({
+    req(con())
+    plan_refresh()
+    plans <- DBI::dbGetQuery(con(), "SELECT plan_id, name FROM plans")
+    selectInput("remove_plan_id", "Select Plan",
+                choices = c("None" = "", setNames(plans$plan_id, plans$name)))
+  })
+
+  # --- Remove handlers ---
+  observeEvent(input$remove_user_btn, {
+    req(con())
+    req(input$remove_user_id != "")
+    tryCatch({
+      remove_user(con(), as.integer(input$remove_user_id))
+      output$remove_user_status <- renderText("User removed successfully.")
+      user_refresh(user_refresh() + 1)
+    }, error = function(e) {
+      output$remove_user_status <- renderText(paste("Error:", e$message))
+    })
+  })
+
+  observeEvent(input$remove_meal_btn, {
+    req(con())
+    req(input$remove_meal_id != "")
+    tryCatch({
+      remove_meal(con(), as.integer(input$remove_meal_id))
+      output$remove_meal_status <- renderText("Meal removed successfully.")
+      meal_refresh(meal_refresh() + 1)
+    }, error = function(e) {
+      output$remove_meal_status <- renderText(paste("Error:", e$message))
+    })
+  })
+
+  observeEvent(input$remove_ingredient_btn, {
+    req(con())
+    req(input$remove_ingredient_id != "")
+    tryCatch({
+      remove_ingredient(con(), as.integer(input$remove_ingredient_id))
+      output$remove_ingredient_status <- renderText("Ingredient removed successfully.")
+      ingredient_refresh(ingredient_refresh() + 1)
+    }, error = function(e) {
+      output$remove_ingredient_status <- renderText(paste("Error:", e$message))
+    })
+  })
+
+  observeEvent(input$remove_plan_btn, {
+    req(con())
+    req(input$remove_plan_id != "")
+    tryCatch({
+      remove_plan(con(), as.integer(input$remove_plan_id))
+      output$remove_plan_status <- renderText("Plan removed successfully.")
+      plan_refresh(plan_refresh() + 1)
+    }, error = function(e) {
+      output$remove_plan_status <- renderText(paste("Error:", e$message))
+    })
+  })
+
+  # --- Clean handlers ---
+  observeEvent(input$clean_ingredients_btn, {
+    req(con())
+    tryCatch({
+      n <- clean_ingredients(con())
+      output$clean_ingredients_status <- renderText(
+        paste0(n, " ingredient(s) removed.")
+      )
+      ingredient_refresh(ingredient_refresh() + 1)
+    }, error = function(e) {
+      output$clean_ingredients_status <- renderText(paste("Error:", e$message))
+    })
+  })
+
+  observeEvent(input$clean_meals_btn, {
+    req(con())
+    tryCatch({
+      n <- clean_meals(con())
+      output$clean_meals_status <- renderText(
+        paste0(n, " meal(s) removed.")
+      )
+      meal_refresh(meal_refresh() + 1)
+    }, error = function(e) {
+      output$clean_meals_status <- renderText(paste("Error:", e$message))
+    })
+  })
+}
+
+#' Settings Tab Server
+#'
+#' Server logic for the settings tab.
+#'
+#' @param input Shiny input object.
+#' @param output Shiny output object.
+#' @param session Shiny session object.
+#' @param con A reactiveVal containing the database connection.
+#' @param db_path A reactiveVal containing the path to the database file.
+#'
+#' @export
+settings_server <- function(input, output, session, con, db_path) {
+
+  output$download_db <- downloadHandler(
+    filename = function() {
+      paste0("nutrition_", format(Sys.Date(), "%Y%m%d"), ".db")
+    },
+    content = function(file) {
+      req(con())
+      file.copy(db_path(), file)
+    }
+  )
 }

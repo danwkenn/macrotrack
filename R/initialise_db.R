@@ -67,4 +67,25 @@ initialise_db <- function(db_path) {
       fat           REAL
     )
   ")
+  DBI::dbExecute(con, "
+    CREATE TABLE IF NOT EXISTS plans (
+      plan_id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      name             TEXT NOT NULL,
+      description      TEXT,
+      pct_to_plan      REAL NOT NULL DEFAULT 1.0,
+      FOREIGN KEY (plan_id) REFERENCES plan_meals(plan_id)
+    )
+  ")
+
+  DBI::dbExecute(con, "
+    CREATE TABLE IF NOT EXISTS plan_meals (
+      plan_meal_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      plan_id      INTEGER NOT NULL,
+      slot_name    TEXT,
+      meal_id      INTEGER NOT NULL,
+      servings     REAL NOT NULL DEFAULT 1.0,
+      FOREIGN KEY (plan_id) REFERENCES plans(plan_id),
+      FOREIGN KEY (meal_id) REFERENCES meals(meal_id)
+    )
+  ")
 }

@@ -1,0 +1,64 @@
+---
+title: "Meal Plan Report"
+output: html_document
+params:
+  user_name: "Unknown"
+  report_date: !r Sys.Date()
+  targets: NULL
+  pct_to_plan: 1.0
+  slots: NULL
+  meal_details: NULL
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+library(knitr)
+library(kableExtra)
+```
+
+# Meal Plan — `r params$user_name`
+**Date:** `r format(params$report_date, "%d %B %Y")`
+
+---
+
+## 1. Daily Summary & Targets
+
+```{r summary}
+kable(params$targets, format = "html") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE)
+```
+
+---
+
+## 2. Plan
+
+```{r plan}
+kable(params$slots, format = "html",
+      col.names = c("Slot Name", "Meal", "Servings")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE)
+```
+
+---
+
+## 3. Meals
+
+```{r meals, results='asis'}
+for (i in seq_along(params$meal_details)) {
+  meal <- params$meal_details[[i]]
+  
+  cat(paste0("\n\n### Slot ", i, " — ", meal$slot_name, ": ", meal$meal_name,
+             " (", meal$servings, " serving(s))\n\n"))
+  
+  tbl <- kable(meal$ingredients, format = "html",
+        col.names = c("Ingredient", "Portions", "Calories", 
+                      "Protein (g)", "Carbs (g)", "Fat (g)")) %>%
+      kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                    full_width = FALSE) %>%
+      row_spec(nrow(meal$ingredients), bold = TRUE, background = "#f5f5f5")
+  
+  cat(as.character(tbl))
+  cat("\n\n")
+}
+```
