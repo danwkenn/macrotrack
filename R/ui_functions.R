@@ -169,13 +169,16 @@ add_ingredients_ui <- function() {
   tabPanel("Add Ingredients",
     br(),
     fluidRow(
-      column(4, textInput("ingredient_name",       "Ingredient Name")),
-      column(4, numericInput("ingredient_calories","Calories (per 100g)",  value = NULL)),
-      column(4, numericInput("ingredient_protein", "Protein (per 100g)",   value = NULL))
+      column(4, textInput("ingredient_name", "Ingredient Name")),
+      column(4,
+        numericInput("ingredient_calories", "Calories (per 100g)", value = NULL),
+        checkboxInput("ingredient_calories_kj", "Enter in kJ", value = FALSE)
+      ),
+      column(4, numericInput("ingredient_protein", "Protein (per 100g)", value = NULL))
     ),
     fluidRow(
-      column(4, numericInput("ingredient_carbs",   "Carbs (per 100g)",     value = NULL)),
-      column(4, numericInput("ingredient_fat",     "Fat (per 100g)",       value = NULL))
+      column(4, numericInput("ingredient_carbs", "Carbs (per 100g)", value = NULL)),
+      column(4, numericInput("ingredient_fat",   "Fat (per 100g)",   value = NULL))
     ),
     hr(),
     h4("Portion"),
@@ -258,19 +261,22 @@ add_ingredient_by_serving_ui <- function() {
         "The app will convert everything to per-100g values automatically.")
     ),
     fluidRow(
-      column(4, textInput("serving_name", "Ingredient Name")),
+      column(4, textInput("serving_name",         "Ingredient Name")),
       column(4, textInput("serving_portion_name", "Portion Name (e.g. falafel ball, slice)"))
     ),
     hr(),
     h4("Packet Serving"),
     fluidRow(
-      column(3, numericInput("serving_size_g",   "Serving Size (g)",      value = NULL)),
-      column(3, numericInput("serving_calories", "Calories per serving",  value = NULL)),
-      column(3, numericInput("serving_protein",  "Protein per serving",   value = NULL))
+      column(3, numericInput("serving_size_g", "Serving Size (g)", value = NULL)),
+      column(3,
+        numericInput("serving_calories", "Calories per serving", value = NULL),
+        checkboxInput("serving_calories_kj", "Enter in kJ", value = FALSE)
+      ),
+      column(3, numericInput("serving_protein", "Protein per serving", value = NULL))
     ),
     fluidRow(
-      column(3, numericInput("serving_carbs",    "Carbs per serving",     value = NULL)),
-      column(3, numericInput("serving_fat",      "Fat per serving",       value = NULL))
+      column(3, numericInput("serving_carbs", "Carbs per serving", value = NULL)),
+      column(3, numericInput("serving_fat",   "Fat per serving",   value = NULL))
     ),
     hr(),
     h4("Portion Factor"),

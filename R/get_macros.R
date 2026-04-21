@@ -4,7 +4,7 @@
 #' ingredient contributions or using meal-level macros, multiplied by the
 #' number of servings.
 #'
-#' @param con A DBIConnection object to the SQLite database.
+#' @param con A DBIConnection object to the Postgres database.
 #' @param meal_id Integer. The ID of the meal to calculate macros for.
 #' @param servings Numeric. The number of servings. Defaults to 1.
 #'
@@ -12,7 +12,7 @@
 #'
 #' @examples
 #' \dontrun{
-#'   con <- DBI::dbConnect(RSQLite::SQLite(), "nutrition.db")
+#'   con <- DBI::dbConnect(RPostgres::Postgres(), ...)
 #'   get_meal_macros(con, meal_id = 1, servings = 2)
 #'   DBI::dbDisconnect(con)
 #' }
@@ -21,8 +21,8 @@
 get_meal_macros <- function(con, meal_id, servings = 1) {
 
   # Query meal-level data
-  meal <- DBI::dbGetQuery(con, "SELECT * FROM meals WHERE meal_id = ?", 
-                          params = list(meal_id))
+  meal <- DBI::dbGetQuery(con, "SELECT * FROM meals WHERE meal_id = $1",
+                          params = list(as.integer(meal_id)))
 
   # If meal-level macros are used, return them directly
   if (meal$use_ingredient_macros == 0) {
@@ -53,10 +53,10 @@ get_meal_macros <- function(con, meal_id, servings = 1) {
     FROM meal_ingredients mi
     JOIN ingredients i ON mi.ingredient_id = i.ingredient_id
     JOIN meals m ON mi.meal_id = m.meal_id
-    WHERE mi.meal_id = ?
+    WHERE mi.meal_id = $1
   "
 
-  meal_data <- DBI::dbGetQuery(con, sql, params = list(meal_id))
+  meal_data <- DBI::dbGetQuery(con, sql, params = list(as.integer(meal_id)))
 
   # Convert to data.table
   data.table::setDT(meal_data)

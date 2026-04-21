@@ -214,14 +214,14 @@ get_macro_targets_via_prompt <- function(weight_kg = NULL, height_cm = NULL,
 #' are present they are returned directly, otherwise targets are calculated
 #' from the user's lifestyle inputs.
 #'
-#' @param con A DBIConnection object to the SQLite database.
+#' @param con A DBIConnection object to the Postgres database.
 #' @param user_id Integer. The ID of the user to retrieve targets for.
 #'
 #' @return A data frame with columns: calories, protein, carbs, fat.
 #'
 #' @examples
 #' \dontrun{
-#'   con <- DBI::dbConnect(RSQLite::SQLite(), "nutrition.db")
+#'   con <- DBI::dbConnect(RPostgres::Postgres(), ...)
 #'   get_user_targets(con, user_id = 1)
 #'   DBI::dbDisconnect(con)
 #' }
@@ -229,8 +229,8 @@ get_macro_targets_via_prompt <- function(weight_kg = NULL, height_cm = NULL,
 #' @export
 get_user_targets <- function(con, user_id) {
 
-  user <- DBI::dbGetQuery(con, "SELECT * FROM users WHERE user_id = ?",
-                          params = list(user_id))
+  user <- DBI::dbGetQuery(con, "SELECT * FROM users WHERE user_id = $1",
+                          params = list(as.integer(user_id)))
 
   # If macro overrides are present, return them directly
   if (!is.na(user$calories) && !is.na(user$protein) &&

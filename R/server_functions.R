@@ -458,6 +458,10 @@ modify_user_server <- function(input, output, session, con,
 #' Server logic for the add ingredients tab, handling ingredient
 #' insertion into the database and resetting the form on success.
 #'
+#' If the "Enter in kJ" checkbox is ticked, the calories field is
+#' interpreted as kilojoules and converted to kcal before storage
+#' (1 kcal = 4.184 kJ). The database always stores kcal.
+#'
 #' @param input Shiny input object.
 #' @param output Shiny output object.
 #' @param session Shiny session object.
@@ -467,15 +471,33 @@ modify_user_server <- function(input, output, session, con,
 #' @export
 add_ingredients_server <- function(input, output, session, con, ingredient_refresh) {
 
+  # Update calories label when kJ checkbox is toggled
+  observeEvent(input$ingredient_calories_kj, {
+    new_label <- if (isTRUE(input$ingredient_calories_kj)) {
+      "Energy (kJ, per 100g)"
+    } else {
+      "Calories (per 100g)"
+    }
+    updateNumericInput(session, "ingredient_calories", label = new_label)
+  }, ignoreInit = TRUE)
+
   observeEvent(input$add_ingredient_btn, {
     req(con())
     req(input$ingredient_name != "")
 
     tryCatch({
+
+      # Convert kJ to kcal if the checkbox is ticked
+      calories_kcal <- if (isTRUE(input$ingredient_calories_kj)) {
+        input$ingredient_calories / 4.184
+      } else {
+        input$ingredient_calories
+      }
+
       add_ingredient(
         con          = con(),
         name         = input$ingredient_name,
-        calories     = input$ingredient_calories,
+        calories     = calories_kcal,
         protein      = input$ingredient_protein,
         carbs        = input$ingredient_carbs,
         fat          = input$ingredient_fat,
@@ -486,13 +508,14 @@ add_ingredients_server <- function(input, output, session, con, ingredient_refre
       ingredient_refresh(ingredient_refresh() + 1)
 
       # Reset form
-      updateTextInput(session,    "ingredient_name",         value = "")
-      updateNumericInput(session, "ingredient_calories",     value = NA)
-      updateNumericInput(session, "ingredient_protein",      value = NA)
-      updateNumericInput(session, "ingredient_carbs",        value = NA)
-      updateNumericInput(session, "ingredient_fat",          value = NA)
-      updateNumericInput(session, "ingredient_portion_size", value = NA)
-      updateTextInput(session,    "ingredient_portion_name", value = "")
+      updateTextInput(session,     "ingredient_name",         value = "")
+      updateNumericInput(session,  "ingredient_calories",     value = NA)
+      updateCheckboxInput(session, "ingredient_calories_kj",  value = FALSE)
+      updateNumericInput(session,  "ingredient_protein",      value = NA)
+      updateNumericInput(session,  "ingredient_carbs",        value = NA)
+      updateNumericInput(session,  "ingredient_fat",          value = NA)
+      updateNumericInput(session,  "ingredient_portion_size", value = NA)
+      updateTextInput(session,     "ingredient_portion_name", value = "")
 
     }, error = function(e) {
       output$add_ingredient_status <- renderText(paste("Error:", e$message))
@@ -586,6 +609,31 @@ build_meal_server <- function(input, output, session, con,
       req(con())
       slot_macros(i)
     })
+  })
+
+  # Update portion input label when ingredient changes
+  lapply(seq_len(n_slots), function(i) {
+    observeEvent(input[[paste0("bm_ingredient_", i)]], {
+      req(con())
+      ingredient_id <- input[[paste0("bm_ingredient_", i)]]
+
+      new_label <- if (is.null(ingredient_id) || ingredient_id == "") {
+        "Portion"
+      } else {
+        ingredient <- DBI::dbGetQuery(
+          con(),
+          "SELECT portion_name FROM ingredients WHERE ingredient_id = $1",
+          params = list(as.integer(ingredient_id))
+        )
+        if (nrow(ingredient) == 0) {
+          "Portion"
+        } else {
+          paste0("Portion (", ingredient$portion_name, ")")
+        }
+      }
+
+      updateNumericInput(session, paste0("bm_portions_", i), label = new_label)
+    }, ignoreInit = TRUE)
   })
 
   # Summary table: totals from slots, plus override + difference if enabled
@@ -706,6 +754,10 @@ build_meal_server <- function(input, output, session, con,
 #' packet serving data and portion factor into per-100g values
 #' and inserts the ingredient into the database.
 #'
+#' If the "Enter in kJ" checkbox is ticked, the calories field is
+#' interpreted as kilojoules and converted to kcal before storage
+#' (1 kcal = 4.184 kJ). The database always stores kcal.
+#'
 #' @param input Shiny input object.
 #' @param output Shiny output object.
 #' @param session Shiny session object.
@@ -722,11 +774,28 @@ add_ingredient_by_serving_server <- function(input, output, session, con, ingred
     paste0("One portion = ", portion_g, "g")
   })
 
+  # Update calories label when kJ checkbox is toggled
+  observeEvent(input$serving_calories_kj, {
+    new_label <- if (isTRUE(input$serving_calories_kj)) {
+      "Energy per serving (kJ)"
+    } else {
+      "Calories per serving"
+    }
+    updateNumericInput(session, "serving_calories", label = new_label)
+  }, ignoreInit = TRUE)
+
   observeEvent(input$add_ingredient_serving_btn, {
     req(con())
     req(input$serving_name != "")
 
     tryCatch({
+
+      # Convert kJ to kcal if the checkbox is ticked
+      calories_kcal <- if (isTRUE(input$serving_calories_kj)) {
+        input$serving_calories / 4.184
+      } else {
+        input$serving_calories
+      }
 
       # Convert to per-100g values
       portion_size <- input$serving_size_g * input$portion_factor
@@ -735,10 +804,10 @@ add_ingredient_by_serving_server <- function(input, output, session, con, ingred
       add_ingredient(
         con          = con(),
         name         = input$serving_name,
-        calories     = round(input$serving_calories * multiplier, 2),
-        protein      = round(input$serving_protein  * multiplier, 2),
-        carbs        = round(input$serving_carbs    * multiplier, 2),
-        fat          = round(input$serving_fat      * multiplier, 2),
+        calories     = round(calories_kcal              * multiplier, 2),
+        protein      = round(input$serving_protein      * multiplier, 2),
+        carbs        = round(input$serving_carbs        * multiplier, 2),
+        fat          = round(input$serving_fat          * multiplier, 2),
         portion_size = round(portion_size, 1),
         portion_name = input$serving_portion_name
       )
@@ -747,14 +816,15 @@ add_ingredient_by_serving_server <- function(input, output, session, con, ingred
       ingredient_refresh(ingredient_refresh() + 1)
 
       # Reset form
-      updateTextInput(session,    "serving_name",         value = "")
-      updateTextInput(session,    "serving_portion_name", value = "")
-      updateNumericInput(session, "serving_size_g",       value = NA)
-      updateNumericInput(session, "serving_calories",     value = NA)
-      updateNumericInput(session, "serving_protein",      value = NA)
-      updateNumericInput(session, "serving_carbs",        value = NA)
-      updateNumericInput(session, "serving_fat",          value = NA)
-      updateNumericInput(session, "portion_factor",       value = 1)
+      updateTextInput(session,     "serving_name",         value = "")
+      updateTextInput(session,     "serving_portion_name", value = "")
+      updateNumericInput(session,  "serving_size_g",       value = NA)
+      updateNumericInput(session,  "serving_calories",     value = NA)
+      updateCheckboxInput(session, "serving_calories_kj",  value = FALSE)
+      updateNumericInput(session,  "serving_protein",      value = NA)
+      updateNumericInput(session,  "serving_carbs",        value = NA)
+      updateNumericInput(session,  "serving_fat",          value = NA)
+      updateNumericInput(session,  "portion_factor",       value = 1)
 
     }, error = function(e) {
       output$add_ingredient_serving_status <- renderText(paste("Error:", e$message))
