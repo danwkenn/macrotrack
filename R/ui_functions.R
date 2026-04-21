@@ -192,9 +192,11 @@ add_ingredients_ui <- function() {
 
 #' Build Meal Tab UI
 #'
-#' Returns the UI for the build meal tab, allowing the user to
-#' construct a meal from ingredients stored in the database using
-#' 10 fixed ingredient slots with live macro calculation.
+#' Returns the UI for the build meal tab. Meals are built by filling
+#' ingredient slots. Each slot has an ingredient dropdown, a portions
+#' input, and a live macros display. A summary table below the slots
+#' shows totals and (when macros are overridden at the meal level)
+#' the override values and their difference from the ingredient totals.
 #'
 #' @return A shiny tabPanel object.
 #'
@@ -217,14 +219,15 @@ build_meal_ui <- function() {
     conditionalPanel(
       condition = "input.build_use_ingredient_macros == false",
       fluidRow(
-        column(3, numericInput("build_calories", "Calories",    value = NULL)),
-        column(3, numericInput("build_protein",  "Protein (g)", value = NULL)),
-        column(3, numericInput("build_carbs",    "Carbs (g)",   value = NULL)),
-        column(3, numericInput("build_fat",      "Fat (g)",     value = NULL))
+        column(3, numericInput("build_calories", "Calories override",    value = NULL)),
+        column(3, numericInput("build_protein",  "Protein (g) override", value = NULL)),
+        column(3, numericInput("build_carbs",    "Carbs (g) override",   value = NULL)),
+        column(3, numericInput("build_fat",      "Fat (g) override",     value = NULL))
       )
     ),
     hr(),
-    uiOutput("build_meal_summary"),
+    h4("Meal Summary"),
+    tableOutput("build_meal_summary"),
     br(),
     actionButton("save_meal_btn", "Save Meal", class = "btn-primary"),
     br(), br(),
@@ -421,16 +424,34 @@ remove_items_ui <- function() {
 
 #' Settings Tab UI
 #'
-#' Returns the UI for the settings tab.
+#' Returns the UI for the settings tab. Provides admin actions:
+#' initialise database tables, download all data as a CSV ZIP, and
+#' (in the danger zone) drop all tables.
 #'
 #' @return A shiny tabPanel object.
 #' @export
 settings_ui <- function() {
   tabPanel("Settings",
     br(),
-    h4("Database"),
-    p("Download a copy of the current SQLite database file."),
-    downloadButton("download_db", "Download Database", class = "btn-info"),
-    br()
+
+    h4("Database setup"),
+    p("Create all tables for an empty database. Safe to click repeatedly: existing tables are left alone."),
+    actionButton("initialise_db_btn", "Initialise new DB", class = "btn-primary"),
+    br(), br(),
+    textOutput("initialise_db_status"),
+
+    hr(),
+
+    h4("Download data"),
+    p("Download a ZIP file containing one CSV per table, reflecting the current state of the database."),
+    downloadButton("download_db_zip", "Download all data (CSV ZIP)", class = "btn-info"),
+
+    hr(),
+
+    h4("Danger zone", style = "color: #b00;"),
+    p("This will permanently destroy all tables and their data. To confirm, you must type the word YES when prompted."),
+    actionButton("drop_all_tables_btn", "Remove all tables", class = "btn-danger"),
+    br(), br(),
+    textOutput("drop_all_tables_status")
   )
 }

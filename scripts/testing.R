@@ -1,5 +1,45 @@
+# Load the updated package functions
+lapply(list.files("R", full.names = TRUE), FUN = source)
+
+# Open a connection to Neon
+con <- DBI::dbConnect(
+  RPostgres::Postgres(),
+  host     = Sys.getenv("NUTRITION_DB_HOST"),
+  dbname   = Sys.getenv("NUTRITION_DB_NAME"),
+  user     = Sys.getenv("NUTRITION_DB_USER"),
+  password = Sys.getenv("NUTRITION_DB_PASSWORD"),
+  port     = 5432,
+  sslmode  = "require"
+)
+
+DBI::dbGetQuery(con, "SELECT 1 AS ok")
+
+# Initialise the schema
+initialise_db(con)
+
+# Verify the tables were created
+DBI::dbListTables(con)
+# Should return: "ingredients", "meal_ingredients", "meals", "plan_meals", "plans", "users"
+
+# Optional: inspect one of the tables' columns
+DBI::dbGetQuery(con, "
+  SELECT column_name, data_type, is_nullable
+  FROM information_schema.columns
+  WHERE table_name = 'ingredients'
+  ORDER BY ordinal_position
+")
+
+DBI::dbDisconnect(con)
+
+
+
+
+
 lapply(list.files("R", full.names = TRUE), FUN = source)
 initialise_db("test.db")
+
+
+
 
 meal <- parse_meal_csv("data/felafel_wrap.csv")
 

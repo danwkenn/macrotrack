@@ -1,0 +1,19 @@
+# R session cruft
+.Rhistory
+.RData
+.Ruserdata
+.Rproj.user/
+
+# NOTE: .Renviron is NOT excluded here.
+# The project-local .Renviron holds non-secret DB config and must be
+# deployed. The password is entered by the user at runtime and never
+# stored on disk. Do NOT add NUTRITION_DB_PASSWORD to .Renviron.
+
+# Git
+.git/
+.gitignore
+
+# Legacy SQLite artefacts (guard for the future)
+*.db
+*.sqlite
+*.sqlite3

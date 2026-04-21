@@ -23,12 +23,12 @@ parse_meal_csv <- function(csv_path) {
   raw <- read.csv(csv_path)
 
   ingredients_df <- raw[, c("ingredient", "calories", "protein",
-                             "carbs", "fat", "portion_size", "portion_name")]
+                            "carbs", "fat", "portion_size", "portion_name")]
 
   meal_ingredients_df <- raw[, c("ingredient", "quantity")]
 
   list(
-    ingredients    = ingredients_df,
+    ingredients      = ingredients_df,
     meal_ingredients = meal_ingredients_df
   )
 
@@ -38,12 +38,14 @@ parse_meal_csv <- function(csv_path) {
 #'
 #' Inserts a meal and its ingredients into the database from a CSV file.
 #' If macro nutrients are not provided, they will be calculated from
-#' the ingredients.
+#' the ingredients. All inserts are performed in a single transaction:
+#' if any step fails, no rows are inserted.
 #'
-#' @param con A DBIConnection object to the SQLite database.
+#' @param con A DBIConnection object to the Postgres database.
 #' @param meal_name Character. The name of the meal to import.
 #' @param csv_path Character. Path to the CSV file containing ingredient data.
-#' @param use_ingredient_macros Boolean. If TRUE, then the macros for this are based on the ingrediants.
+#' @param use_ingredient_macros Logical. If TRUE, the macros for this meal are
+#'   derived from its ingredients.
 #' @param calories Optional numeric. Total calories for the meal. If NULL,
 #'   calculated from ingredients.
 #' @param protein Optional numeric. Total protein for the meal in grams. If NULL,
@@ -57,7 +59,7 @@ parse_meal_csv <- function(csv_path) {
 #'
 #' @examples
 #' \dontrun{
-#'   con <- DBI::dbConnect(RSQLite::SQLite(), "nutrition.db")
+#'   con <- DBI::dbConnect(RPostgres::Postgres(), ...)
 #'   import_meal(con, meal_name = "Falafel Wrap", csv_path = "falafel_wrap.csv")
 #'   DBI::dbDisconnect(con)
 #' }
@@ -68,52 +70,57 @@ import_meal <- function(con, meal_name, csv_path, use_ingredient_macros = TRUE,
                         carbs = NULL, fat = NULL) {
 
   # Parse the CSV
-  parsed <- parse_meal_csv(csv_path)
+  parsed         <- parse_meal_csv(csv_path)
   ingredients_df <- parsed$ingredients
+  quantities     <- parsed$meal_ingredients$quantity
 
-  # Find the current maximum ingredient_id
-  max_id <- DBI::dbGetQuery(con, "SELECT MAX(ingredient_id) FROM ingredients")[[1]]
+  # Everything below runs atomically: if anything fails, nothing is inserted.
+  DBI::dbWithTransaction(con, {
 
-  # If table is empty MAX() returns NA, so default to 0
-  if (is.na(max_id)) max_id <- 0
+    # Insert each ingredient, capturing its new ID in input order
+    ingredient_ids <- vapply(
+      seq_len(nrow(ingredients_df)),
+      function(i) {
+        add_ingredient(
+          con          = con,
+          name         = ingredients_df$ingredient[i],
+          calories     = ingredients_df$calories[i],
+          protein      = ingredients_df$protein[i],
+          carbs        = ingredients_df$carbs[i],
+          fat          = ingredients_df$fat[i],
+          portion_size = ingredients_df$portion_size[i],
+          portion_name = ingredients_df$portion_name[i]
+        )
+      },
+      integer(1)
+    )
 
-  # Assign new IDs
-  ingredients_df$ingredient_id <- seq(max_id + 1, max_id + nrow(ingredients_df))
+    # Insert the meal, capture its new ID
+    meal_result <- DBI::dbGetQuery(
+      con,
+      "INSERT INTO meals
+         (name, use_ingredient_macros, calories, protein, carbs, fat)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING meal_id",
+      params = list(
+        meal_name,
+        as.integer(use_ingredient_macros),
+        if (is.null(calories)) NA_real_ else calories,
+        if (is.null(protein))  NA_real_ else protein,
+        if (is.null(carbs))    NA_real_ else carbs,
+        if (is.null(fat))      NA_real_ else fat
+      )
+    )
+    new_meal_id <- meal_result$meal_id
 
-  names(ingredients_df)[which(names(ingredients_df) == "ingredient")] <- "name"
-
-  # Insert into ingredients table
-  DBI::dbAppendTable(con, "ingredients", ingredients_df)
-
-  # Find the current maximum meal_id
-  max_meal_id <- DBI::dbGetQuery(con, "SELECT MAX(meal_id) FROM meals")[[1]]
-
-  # If table is empty MAX() returns NA, so default to 0
-  if (is.na(max_meal_id)) max_meal_id <- 0
-
-  # Build the meals data frame
-  meals_df <- data.frame(
-    meal_id               = max_meal_id + 1,
-    name                  = meal_name,
-    use_ingredient_macros = as.numeric(use_ingredient_macros),
-    calories              = if (is.null(calories)) NA_real_ else calories,
-    protein               = if (is.null(protein)) NA_real_ else protein,
-    carbs                 = if (is.null(carbs)) NA_real_ else carbs,
-    fat                   = if (is.null(fat)) NA_real_ else fat
-  )
-
-  # Insert into meals table
-  DBI::dbAppendTable(con, "meals", meals_df)
-
-  # Build the meal_ingredients data frame
-  meal_ingredients_df <- data.frame(
-    meal_id       = max_meal_id + 1,
-    ingredient_id = ingredients_df$ingredient_id,
-    quantity      = parsed$meal_ingredients$quantity
-  )
-
-  # Insert into meal_ingredients table
-  DBI::dbAppendTable(con, "meal_ingredients", meal_ingredients_df)
+    # Link ingredients to the meal
+    meal_ingredients_df <- data.frame(
+      meal_id       = new_meal_id,
+      ingredient_id = ingredient_ids,
+      quantity      = quantities
+    )
+    DBI::dbAppendTable(con, "meal_ingredients", meal_ingredients_df)
+  })
 
   invisible(TRUE)
 }

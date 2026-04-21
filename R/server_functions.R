@@ -151,7 +151,7 @@ meal_planner_server <- function(input, output, session, con,
 
       # --- User name ---
       user_name <- if (!is.null(input$selected_user) && input$selected_user != "") {
-        user <- DBI::dbGetQuery(con(), "SELECT name FROM users WHERE user_id = ?",
+        user <- DBI::dbGetQuery(con(), "SELECT name FROM users WHERE user_id = $1",
                                 params = list(as.integer(input$selected_user)))
         user$name
       } else {
@@ -201,7 +201,7 @@ meal_planner_server <- function(input, output, session, con,
         slot_name <- input[[paste0("slot_name_", i)]]
         servings  <- input[[paste0("servings_", i)]]
         if (is.null(meal_id) || meal_id == "") return(NULL)
-        meal_name <- DBI::dbGetQuery(con(), "SELECT name FROM meals WHERE meal_id = ?",
+        meal_name <- DBI::dbGetQuery(con(), "SELECT name FROM meals WHERE meal_id = $1",
                                      params = list(as.integer(meal_id)))$name
         data.frame(
           slot_name = if (slot_name == "") paste("Slot", i) else slot_name,
@@ -218,7 +218,7 @@ meal_planner_server <- function(input, output, session, con,
         if (is.null(meal_id) || meal_id == "") return(NULL)
 
         meal_id_int <- as.integer(meal_id)
-        meal_name   <- DBI::dbGetQuery(con(), "SELECT name FROM meals WHERE meal_id = ?",
+        meal_name   <- DBI::dbGetQuery(con(), "SELECT name FROM meals WHERE meal_id = $1",
                                        params = list(meal_id_int))$name
 
         # Get ingredients for this meal
@@ -233,7 +233,7 @@ meal_planner_server <- function(input, output, session, con,
             i.fat
           FROM meal_ingredients mi
           JOIN ingredients i ON mi.ingredient_id = i.ingredient_id
-          WHERE mi.meal_id = ?
+          WHERE mi.meal_id = $1
         "
         ingredients <- DBI::dbGetQuery(con(), sql, params = list(meal_id_int))
 
@@ -408,7 +408,7 @@ modify_user_server <- function(input, output, session, con,
   observeEvent(input$modify_user_select, {
     req(input$modify_user_select != "")
     req(input$modify_user_select != "None")
-    user <- DBI::dbGetQuery(con(), "SELECT * FROM users WHERE user_id = ?",
+    user <- DBI::dbGetQuery(con(), "SELECT * FROM users WHERE user_id = $1",
                             params = list(as.integer(input$modify_user_select)))
     updateTextInput(session,    "modify_name",          value = user$name)
     updateNumericInput(session, "modify_weight",        value = user$weight_kg)
@@ -462,9 +462,10 @@ modify_user_server <- function(input, output, session, con,
 #' @param output Shiny output object.
 #' @param session Shiny session object.
 #' @param con A reactiveVal containing the database connection.
+#' @param ingredient_refresh A reactiveVal used to trigger ingredient list refresh.
 #'
 #' @export
-add_ingredients_server <- function(input, output, session, con) {
+add_ingredients_server <- function(input, output, session, con, ingredient_refresh) {
 
   observeEvent(input$add_ingredient_btn, {
     req(con())
@@ -482,6 +483,7 @@ add_ingredients_server <- function(input, output, session, con) {
         portion_name = input$ingredient_portion_name
       )
       output$add_ingredient_status <- renderText("Ingredient added successfully.")
+      ingredient_refresh(ingredient_refresh() + 1)
 
       # Reset form
       updateTextInput(session,    "ingredient_name",         value = "")
@@ -500,9 +502,10 @@ add_ingredients_server <- function(input, output, session, con) {
 
 #' Build Meal Tab Server
 #'
-#' Server logic for the build meal tab. Uses 10 fixed ingredient slots
-#' with live macro calculation and a summary section that compares
-#' ingredient-derived totals against manual overrides.
+#' Server logic for the build meal tab. Meals are built by filling
+#' numbered ingredient slots. Each slot reads an ingredient id and a
+#' portion count; macros are computed live per slot and totaled in
+#' a summary table. On save, filled slots are inserted transactionally.
 #'
 #' @param input Shiny input object.
 #' @param output Shiny output object.
@@ -515,169 +518,180 @@ add_ingredients_server <- function(input, output, session, con) {
 build_meal_server <- function(input, output, session, con,
                               meal_refresh, ingredient_choices) {
 
-  # --- Render the 10 ingredient slots ---
+  n_slots <- 10
+
+  # Render the slot UI once the database is connected
   output$build_meal_slots <- renderUI({
     req(con())
+    choices_val <- ingredient_choices()
     tagList(
-      lapply(1:10, function(i) {
+      lapply(seq_len(n_slots), function(i) {
         fluidRow(
-          column(4,
+          column(5,
             selectizeInput(
-              inputId  = paste0("ingredient_slot_", i),
-              label    = paste("Slot", i, "Ingredient"),
-              choices  = c("None" = "", ingredient_choices()),
+              inputId  = paste0("bm_ingredient_", i),
+              label    = paste("Slot", i, "- Ingredient"),
+              choices  = c("None" = "", choices_val),
               selected = "",
               options  = list(placeholder = "Search for an ingredient...")
             )
           ),
           column(2,
             numericInput(
-              inputId = paste0("quantity_slot_", i),
-              label   = "Quantity (portions)",
+              inputId = paste0("bm_portions_", i),
+              label   = "Portions",
               value   = 1,
               min     = 0.5,
               step    = 0.5
             )
           ),
-          column(4,
-            tableOutput(paste0("slot_macros_", i))
+          column(5,
+            tableOutput(paste0("bm_macros_", i))
           )
         )
       })
     )
   })
 
-  # --- Render per-slot macros ---
-  lapply(1:10, function(i) {
-    output[[paste0("slot_macros_", i)]] <- renderTable({
-      req(con())
-      ingredient_id <- input[[paste0("ingredient_slot_", i)]]
-      quantity      <- input[[paste0("quantity_slot_", i)]]
-      req(ingredient_id != "")
-      req(!is.null(quantity), quantity > 0)
+  # Helper: compute macros for a given slot i (returns NULL if empty)
+  slot_macros <- function(i) {
+    ingredient_id <- input[[paste0("bm_ingredient_", i)]]
+    portions      <- input[[paste0("bm_portions_", i)]]
+    if (is.null(ingredient_id) || ingredient_id == "") return(NULL)
+    if (is.null(portions) || is.na(portions) || portions <= 0) return(NULL)
 
-      ingredient <- DBI::dbGetQuery(
-        con(),
-        "SELECT * FROM ingredients WHERE ingredient_id = ?",
-        params = list(as.integer(ingredient_id))
-      )
-
-      data.frame(
-        calories = round((ingredient$portion_size / 100) * ingredient$calories * quantity, 1),
-        protein  = round((ingredient$portion_size / 100) * ingredient$protein  * quantity, 1),
-        carbs    = round((ingredient$portion_size / 100) * ingredient$carbs    * quantity, 1),
-        fat      = round((ingredient$portion_size / 100) * ingredient$fat      * quantity, 1)
-      )
-    })
-  })
-
-  # --- Reactive helper: collect non-empty slot data ---
-  slot_totals <- reactive({
-    req(con())
-    totals <- lapply(1:10, function(i) {
-      ingredient_id <- input[[paste0("ingredient_slot_", i)]]
-      quantity      <- input[[paste0("quantity_slot_", i)]]
-      if (is.null(ingredient_id) || ingredient_id == "") return(NULL)
-      if (is.null(quantity) || quantity <= 0) return(NULL)
-
-      ingredient <- DBI::dbGetQuery(
-        con(),
-        "SELECT * FROM ingredients WHERE ingredient_id = ?",
-        params = list(as.integer(ingredient_id))
-      )
-
-      data.frame(
-        ingredient_id = ingredient$ingredient_id,
-        quantity      = quantity,
-        calories      = (ingredient$portion_size / 100) * ingredient$calories * quantity,
-        protein       = (ingredient$portion_size / 100) * ingredient$protein  * quantity,
-        carbs         = (ingredient$portion_size / 100) * ingredient$carbs    * quantity,
-        fat           = (ingredient$portion_size / 100) * ingredient$fat      * quantity
-      )
-    })
-    Filter(Negate(is.null), totals)
-  })
-
-  # --- Render summary section ---
-  output$build_meal_summary <- renderUI({
-    req(con())
-    tagList(
-      h4("Summary"),
-      tableOutput("build_meal_summary_table")
+    ingredient <- DBI::dbGetQuery(
+      con(),
+      "SELECT name, calories, protein, carbs, fat, portion_size
+       FROM ingredients
+       WHERE ingredient_id = $1",
+      params = list(as.integer(ingredient_id))
     )
+    if (nrow(ingredient) == 0) return(NULL)
+
+    factor <- (ingredient$portion_size / 100) * portions
+    data.frame(
+      Ingredient = ingredient$name,
+      Portions   = portions,
+      Calories   = round(ingredient$calories * factor, 1),
+      Protein    = round(ingredient$protein  * factor, 1),
+      Carbs      = round(ingredient$carbs    * factor, 1),
+      Fat        = round(ingredient$fat      * factor, 1)
+    )
+  }
+
+  # Per-slot macro tables
+  lapply(seq_len(n_slots), function(i) {
+    output[[paste0("bm_macros_", i)]] <- renderTable({
+      req(con())
+      slot_macros(i)
+    })
   })
 
-  output$build_meal_summary_table <- renderTable({
-    slots <- slot_totals()
-    if (length(slots) == 0) return(NULL)
+  # Summary table: totals from slots, plus override + difference if enabled
+  output$build_meal_summary <- renderTable({
+    req(con())
 
-    combined <- do.call(rbind, slots)
-    totals   <- round(c(
-      sum(combined$calories),
-      sum(combined$protein),
-      sum(combined$carbs),
-      sum(combined$fat)
-    ), 1)
+    rows <- lapply(seq_len(n_slots), slot_macros)
+    rows <- Filter(Negate(is.null), rows)
 
-    if (isTRUE(input$build_use_ingredient_macros)) {
-      data.frame(
-        Macro = c("Calories", "Protein (g)", "Carbs (g)", "Fat (g)"),
-        Total = totals
-      )
+    if (length(rows) == 0) {
+      totals <- c(Calories = 0, Protein = 0, Carbs = 0, Fat = 0)
     } else {
-      overrides <- c(input$build_calories, input$build_protein,
-                     input$build_carbs,    input$build_fat)
-      diff      <- totals - overrides
-      data.frame(
-        Macro      = c("Calories", "Protein (g)", "Carbs (g)", "Fat (g)"),
-        Total      = totals,
-        Override   = overrides,
-        Difference = ifelse(diff >= 0,
-                            paste0("+", round(diff, 1)),
-                            as.character(round(diff, 1)))
+      combined <- do.call(rbind, rows)
+      totals <- c(
+        Calories = sum(combined$Calories),
+        Protein  = sum(combined$Protein),
+        Carbs    = sum(combined$Carbs),
+        Fat      = sum(combined$Fat)
       )
     }
+
+    summary_df <- data.frame(
+      Macro = c("Calories", "Protein (g)", "Carbs (g)", "Fat (g)"),
+      Total = round(as.numeric(totals), 1)
+    )
+
+    # Add override and difference columns when override mode is active
+    if (isTRUE(!input$build_use_ingredient_macros)) {
+      overrides <- c(
+        if (is.null(input$build_calories) || is.na(input$build_calories)) NA_real_ else input$build_calories,
+        if (is.null(input$build_protein)  || is.na(input$build_protein))  NA_real_ else input$build_protein,
+        if (is.null(input$build_carbs)    || is.na(input$build_carbs))    NA_real_ else input$build_carbs,
+        if (is.null(input$build_fat)      || is.na(input$build_fat))      NA_real_ else input$build_fat
+      )
+      diffs <- overrides - summary_df$Total
+      summary_df$Override   <- round(overrides, 1)
+      summary_df$Difference <- ifelse(
+        is.na(diffs), NA_character_,
+        ifelse(diffs >= 0, paste0("+", round(diffs, 1)), as.character(round(diffs, 1)))
+      )
+    }
+
+    summary_df
   })
 
-  # --- Save meal ---
+  # Save meal to database
   observeEvent(input$save_meal_btn, {
     req(con())
     req(input$build_meal_name != "")
 
-    slots <- slot_totals()
-    req(length(slots) > 0)
+    # Collect filled slots as (ingredient_id, portions) pairs
+    filled <- lapply(seq_len(n_slots), function(i) {
+      ingredient_id <- input[[paste0("bm_ingredient_", i)]]
+      portions      <- input[[paste0("bm_portions_", i)]]
+      if (is.null(ingredient_id) || ingredient_id == "")     return(NULL)
+      if (is.null(portions) || is.na(portions) || portions <= 0) return(NULL)
+      data.frame(
+        ingredient_id = as.integer(ingredient_id),
+        quantity      = portions
+      )
+    })
+    filled <- Filter(Negate(is.null), filled)
+
+    if (length(filled) == 0) {
+      output$build_meal_status <- renderText("Error: no ingredients selected.")
+      return()
+    }
+
+    meal_ingredients_df <- do.call(rbind, filled)
 
     tryCatch({
-      max_meal_id <- DBI::dbGetQuery(con(), "SELECT MAX(meal_id) FROM meals")[[1]]
-      if (is.na(max_meal_id)) max_meal_id <- 0
 
-      meals_df <- data.frame(
-        meal_id               = max_meal_id + 1,
-        name                  = input$build_meal_name,
-        use_ingredient_macros = as.numeric(input$build_use_ingredient_macros),
-        calories              = if (is.na(input$build_calories)) NA_real_ else input$build_calories,
-        protein               = if (is.na(input$build_protein))  NA_real_ else input$build_protein,
-        carbs                 = if (is.na(input$build_carbs))    NA_real_ else input$build_carbs,
-        fat                   = if (is.na(input$build_fat))      NA_real_ else input$build_fat
-      )
-      DBI::dbAppendTable(con(), "meals", meals_df)
+      DBI::dbWithTransaction(con(), {
 
-      combined <- do.call(rbind, slots)
-      meal_ingredients_df <- data.frame(
-        meal_id       = max_meal_id + 1,
-        ingredient_id = combined$ingredient_id,
-        quantity      = combined$quantity
-      )
-      DBI::dbAppendTable(con(), "meal_ingredients", meal_ingredients_df)
+        # Insert the meal, capture its new ID
+        meal_result <- DBI::dbGetQuery(
+          con(),
+          "INSERT INTO meals
+             (name, use_ingredient_macros, calories, protein, carbs, fat)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           RETURNING meal_id",
+          params = list(
+            input$build_meal_name,
+            as.integer(input$build_use_ingredient_macros),
+            if (is.null(input$build_calories) || is.na(input$build_calories)) NA_real_ else input$build_calories,
+            if (is.null(input$build_protein)  || is.na(input$build_protein))  NA_real_ else input$build_protein,
+            if (is.null(input$build_carbs)    || is.na(input$build_carbs))    NA_real_ else input$build_carbs,
+            if (is.null(input$build_fat)      || is.na(input$build_fat))      NA_real_ else input$build_fat
+          )
+        )
+        new_meal_id <- meal_result$meal_id
+
+        # Link selected ingredients to the new meal
+        meal_ingredients_df$meal_id <- new_meal_id
+        meal_ingredients_df <- meal_ingredients_df[, c("meal_id", "ingredient_id", "quantity")]
+        DBI::dbAppendTable(con(), "meal_ingredients", meal_ingredients_df)
+      })
 
       output$build_meal_status <- renderText("Meal saved successfully.")
       meal_refresh(meal_refresh() + 1)
 
       # Reset form
       updateTextInput(session, "build_meal_name", value = "")
-      for (i in 1:10) {
-        updateSelectizeInput(session, paste0("ingredient_slot_", i), selected = "")
-        updateNumericInput(session,   paste0("quantity_slot_", i),   value = 1)
+      for (i in seq_len(n_slots)) {
+        updateSelectizeInput(session, paste0("bm_ingredient_", i), selected = "")
+        updateNumericInput(session,  paste0("bm_portions_", i),    value = 1)
       }
 
     }, error = function(e) {
@@ -696,9 +710,10 @@ build_meal_server <- function(input, output, session, con,
 #' @param output Shiny output object.
 #' @param session Shiny session object.
 #' @param con A reactiveVal containing the database connection.
+#' @param ingredient_refresh A reactiveVal used to trigger ingredient list refresh.
 #'
 #' @export
-add_ingredient_by_serving_server <- function(input, output, session, con) {
+add_ingredient_by_serving_server <- function(input, output, session, con, ingredient_refresh) {
 
   # Live preview of portion size in grams
   output$portion_preview <- renderText({
@@ -729,6 +744,7 @@ add_ingredient_by_serving_server <- function(input, output, session, con) {
       )
 
       output$add_ingredient_serving_status <- renderText("Ingredient added successfully.")
+      ingredient_refresh(ingredient_refresh() + 1)
 
       # Reset form
       updateTextInput(session,    "serving_name",         value = "")
@@ -848,27 +864,31 @@ build_plan_server <- function(input, output, session, con,
 
     tryCatch({
 
-      # Get next plan_id
-      max_plan_id <- DBI::dbGetQuery(con(), "SELECT MAX(plan_id) FROM plans")[[1]]
-      if (is.na(max_plan_id)) max_plan_id <- 0
+      DBI::dbWithTransaction(con(), {
 
-      # Insert plan
-      plans_df <- data.frame(
-        plan_id     = max_plan_id + 1,
-        name        = input$plan_name,
-        description = if (input$plan_description == "") NA_character_ else input$plan_description,
-        pct_to_plan = input$plan_pct_to_plan / 100
-      )
-      DBI::dbAppendTable(con(), "plans", plans_df)
+        # Insert the plan, capture its new ID
+        plan_result <- DBI::dbGetQuery(
+          con(),
+          "INSERT INTO plans (name, description, pct_to_plan)
+           VALUES ($1, $2, $3)
+           RETURNING plan_id",
+          params = list(
+            input$plan_name,
+            if (input$plan_description == "") NA_character_ else input$plan_description,
+            input$plan_pct_to_plan / 100
+          )
+        )
+        new_plan_id <- plan_result$plan_id
 
-      # Insert plan_meals
-      plan_meals_df <- data.frame(
-        plan_id   = max_plan_id + 1,
-        slot_name = plan_meals()$slot_name,
-        meal_id   = plan_meals()$meal_id,
-        servings  = plan_meals()$servings
-      )
-      DBI::dbAppendTable(con(), "plan_meals", plan_meals_df)
+        # Link the meals to the new plan
+        plan_meals_df <- data.frame(
+          plan_id   = new_plan_id,
+          slot_name = plan_meals()$slot_name,
+          meal_id   = plan_meals()$meal_id,
+          servings  = plan_meals()$servings
+        )
+        DBI::dbAppendTable(con(), "plan_meals", plan_meals_df)
+      })
 
       output$build_plan_status <- renderText("Plan saved successfully.")
       plan_refresh(plan_refresh() + 1)
@@ -1024,24 +1044,109 @@ remove_items_server <- function(input, output, session, con,
 
 #' Settings Tab Server
 #'
-#' Server logic for the settings tab.
+#' Server logic for the settings tab. Provides three admin actions:
+#' initialise DB tables, download all data as a CSV ZIP, and drop
+#' all tables (with a typed confirmation).
 #'
 #' @param input Shiny input object.
 #' @param output Shiny output object.
 #' @param session Shiny session object.
 #' @param con A reactiveVal containing the database connection.
-#' @param db_path A reactiveVal containing the path to the database file.
+#' @param user_refresh A reactiveVal used to trigger user list refresh.
+#' @param meal_refresh A reactiveVal used to trigger meal list refresh.
+#' @param plan_refresh A reactiveVal used to trigger plan list refresh.
+#' @param ingredient_refresh A reactiveVal used to trigger ingredient list refresh.
 #'
 #' @export
-settings_server <- function(input, output, session, con, db_path) {
+settings_server <- function(input, output, session, con,
+                            user_refresh, meal_refresh,
+                            plan_refresh, ingredient_refresh) {
 
-  output$download_db <- downloadHandler(
+  # Helper to bump all refresh counters
+  bump_all <- function() {
+    user_refresh(user_refresh() + 1)
+    meal_refresh(meal_refresh() + 1)
+    plan_refresh(plan_refresh() + 1)
+    ingredient_refresh(ingredient_refresh() + 1)
+  }
+
+  # --- Initialise new DB ---
+  observeEvent(input$initialise_db_btn, {
+    req(con())
+    tryCatch({
+      initialise_db(con())
+      output$initialise_db_status <- renderText("Tables created (or already existed).")
+      bump_all()
+    }, error = function(e) {
+      output$initialise_db_status <- renderText(paste("Error:", e$message))
+    })
+  })
+
+  # --- Download all data as CSV ZIP ---
+  output$download_db_zip <- downloadHandler(
     filename = function() {
-      paste0("nutrition_", format(Sys.Date(), "%Y%m%d"), ".db")
+      paste0("nutrition_", format(Sys.Date(), "%Y%m%d"), ".zip")
     },
     content = function(file) {
       req(con())
-      file.copy(db_path(), file)
+
+      tables <- c("ingredients", "meals", "meal_ingredients",
+                  "users", "plans", "plan_meals")
+
+      tmp_dir <- tempfile("nutrition_dump_")
+      dir.create(tmp_dir)
+      on.exit(unlink(tmp_dir, recursive = TRUE), add = TRUE)
+
+      csv_paths <- character()
+      for (tbl in tables) {
+        df <- tryCatch(
+          DBI::dbGetQuery(con(), paste0("SELECT * FROM ", tbl)),
+          error = function(e) NULL
+        )
+        if (is.null(df)) next
+        csv_path <- file.path(tmp_dir, paste0(tbl, ".csv"))
+        write.csv(df, csv_path, row.names = FALSE)
+        csv_paths <- c(csv_paths, csv_path)
+      }
+
+      # Zip the CSVs. Use relative paths inside the archive.
+      old_wd <- setwd(tmp_dir)
+      on.exit(setwd(old_wd), add = TRUE)
+      utils::zip(zipfile = file, files = basename(csv_paths))
     }
   )
+
+  # --- Remove all tables (with confirmation modal) ---
+  observeEvent(input$drop_all_tables_btn, {
+    showModal(modalDialog(
+      title = "Remove all tables",
+      p("This will permanently destroy all tables and their data."),
+      p("To confirm, type YES below and click Remove."),
+      textInput("drop_all_confirm", label = NULL, placeholder = "Type YES"),
+      footer = tagList(
+        modalButton("Cancel"),
+        actionButton("drop_all_confirm_btn", "Remove", class = "btn-danger")
+      ),
+      easyClose = FALSE
+    ))
+  })
+
+  observeEvent(input$drop_all_confirm_btn, {
+    req(con())
+    if (!isTRUE(input$drop_all_confirm == "YES")) {
+      output$drop_all_tables_status <- renderText(
+        "Confirmation failed: you must type YES exactly."
+      )
+      removeModal()
+      return()
+    }
+    tryCatch({
+      drop_all_tables(con(), confirm = TRUE)
+      output$drop_all_tables_status <- renderText("All tables removed.")
+      bump_all()
+    }, error = function(e) {
+      output$drop_all_tables_status <- renderText(paste("Error:", e$message))
+    })
+    removeModal()
+  })
 }

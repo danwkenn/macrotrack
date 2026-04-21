@@ -1,0 +1,23 @@
+# =========================================================================
+# Project-local .Renviron
+# =========================================================================
+# This file is DEPLOYED to shinyapps.io with the app bundle.
+#
+# NEVER put NUTRITION_DB_PASSWORD (or any other secret) in this file.
+# The password is collected from the user via the connect screen at
+# runtime and never persisted.
+#
+# These values are NOT secrets:
+#   - NUTRITION_DB_HOST   : publicly resolvable DNS name
+#   - NUTRITION_DB_NAME   : generic "neondb" database name
+#   - NUTRITION_DB_USER   : the role name (useless without the password)
+#   - NUTRITION_DB_PORT   : standard Postgres port
+#
+# If you need to rotate any of these, change here AND in your home
+# ~/.Renviron (so local and deployed environments match), then redeploy.
+# =========================================================================
+
+NUTRITION_DB_HOST=ep-odd-salad-a793wuog-pooler.ap-southeast-2.aws.neon.tech
+NUTRITION_DB_NAME=neondb
+NUTRITION_DB_USER=neondb_owner
+NUTRITION_DB_PORT=5432
