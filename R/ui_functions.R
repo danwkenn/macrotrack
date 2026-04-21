@@ -193,7 +193,8 @@ add_ingredients_ui <- function() {
 #' Build Meal Tab UI
 #'
 #' Returns the UI for the build meal tab, allowing the user to
-#' construct a meal from ingredients stored in the database.
+#' construct a meal from ingredients stored in the database using
+#' 10 fixed ingredient slots with live macro calculation.
 #'
 #' @return A shiny tabPanel object.
 #'
@@ -205,18 +206,7 @@ build_meal_ui <- function() {
       column(4, textInput("build_meal_name", "Meal Name"))
     ),
     hr(),
-    h4("Add Ingredients"),
-    fluidRow(
-      column(4, uiOutput("build_ingredient_select")),
-      column(2, numericInput("build_quantity", "Quantity (portions)",
-                             value = 1, min = 0.5, step = 0.5)),
-      column(2,
-        br(),
-        actionButton("add_to_meal_btn", "Add to Meal", class = "btn-success")
-      )
-    ),
-    br(),
-    tableOutput("build_meal_table"),
+    uiOutput("build_meal_slots"),
     hr(),
     fluidRow(
       column(4,
@@ -233,6 +223,8 @@ build_meal_ui <- function() {
         column(3, numericInput("build_fat",      "Fat (g)",     value = NULL))
       )
     ),
+    hr(),
+    uiOutput("build_meal_summary"),
     br(),
     actionButton("save_meal_btn", "Save Meal", class = "btn-primary"),
     br(), br(),
