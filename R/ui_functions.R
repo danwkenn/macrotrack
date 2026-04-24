@@ -461,3 +461,39 @@ settings_ui <- function() {
     textOutput("drop_all_tables_status")
   )
 }
+
+#' Deduplicate Ingredients Tab UI
+#'
+#' Returns the UI for the deduplicate ingredients tab. The user selects
+#' two or more ingredients, picks one as the keeper, previews the
+#' changes, then confirms. Only ingredients currently referenced by at
+#' least one meal are offered (orphans can be cleaned via Remove Items).
+#'
+#' @return A shiny tabPanel object.
+#' @export
+deduplicate_ingredients_ui <- function() {
+  tabPanel("Deduplicate Ingredients",
+    br(),
+    wellPanel(
+      p(strong("How this works:")),
+      p("Select two or more ingredients that are duplicates of each other,",
+        "then choose one to keep. All meal references to the other ingredients",
+        "will be rewritten to point at the keeper, with portion quantities",
+        "adjusted so the total grams in each meal stays the same."),
+      p("Only ingredients currently used in at least one meal appear below.",
+        "Unused ingredients can be removed from the Remove Items tab.")
+    ),
+    uiOutput("dedupe_select_ui"),
+    br(),
+    uiOutput("dedupe_keeper_ui"),
+    br(),
+    actionButton("dedupe_preview_btn", "Preview", class = "btn-info"),
+    hr(),
+    h4("Preview"),
+    tableOutput("dedupe_preview_table"),
+    br(),
+    actionButton("dedupe_confirm_btn", "Confirm Dedupe", class = "btn-danger"),
+    br(), br(),
+    textOutput("dedupe_status")
+  )
+}

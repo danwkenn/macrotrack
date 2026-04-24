@@ -1220,3 +1220,160 @@ settings_server <- function(input, output, session, con,
     removeModal()
   })
 }
+
+#' Deduplicate Ingredients Tab Server
+#'
+#' Server logic for the deduplicate ingredients tab. Users select
+#' ingredients to dedupe, pick a keeper, preview the changes, then
+#' confirm. The dropdown lists only ingredients referenced in
+#' meal_ingredients.
+#'
+#' @param input Shiny input object.
+#' @param output Shiny output object.
+#' @param session Shiny session object.
+#' @param con A reactiveVal containing the database connection.
+#' @param ingredient_refresh A reactiveVal used to trigger ingredient list refresh.
+#' @param meal_refresh A reactiveVal used to trigger meal list refresh.
+#'
+#' @export
+deduplicate_ingredients_server <- function(input, output, session, con,
+                                           ingredient_refresh, meal_refresh) {
+
+  # Preview data is held here. Confirm is only enabled when non-NULL.
+  preview_data <- reactiveVal(NULL)
+
+  # Ingredient list (only those used in at least one meal), refreshed
+  # on ingredient_refresh or meal_refresh changes.
+  used_ingredients <- reactive({
+    req(con())
+    ingredient_refresh()
+    meal_refresh()
+    DBI::dbGetQuery(con(), "
+      SELECT i.ingredient_id, i.name, i.portion_size, i.portion_name
+      FROM ingredients i
+      WHERE i.ingredient_id IN (
+        SELECT DISTINCT ingredient_id FROM meal_ingredients
+      )
+      ORDER BY i.name, i.ingredient_id
+    ")
+  })
+
+  # Multi-select of ingredients to consider. Label disambiguates
+  # duplicates sharing a name by including the id and portion size.
+  output$dedupe_select_ui <- renderUI({
+    req(con())
+    ing <- used_ingredients()
+    choices <- setNames(
+      ing$ingredient_id,
+      paste0(ing$name, " (id=", ing$ingredient_id,
+             ", ", ing$portion_size, "g per ", ing$portion_name, ")")
+    )
+    selectizeInput(
+      inputId  = "dedupe_selected",
+      label    = "Select ingredients to dedupe (2 or more)",
+      choices  = choices,
+      multiple = TRUE,
+      options  = list(placeholder = "Search ingredients...")
+    )
+  })
+
+  # Keeper radio: appears only once 2+ ingredients are selected.
+  output$dedupe_keeper_ui <- renderUI({
+    req(con())
+    selected <- input$dedupe_selected
+    if (is.null(selected) || length(selected) < 2) {
+      return(helpText("Select at least two ingredients to choose a keeper."))
+    }
+    ing <- used_ingredients()
+    ing <- ing[ing$ingredient_id %in% as.integer(selected), , drop = FALSE]
+    choices <- setNames(
+      ing$ingredient_id,
+      paste0(ing$name, " (id=", ing$ingredient_id,
+             ", ", ing$portion_size, "g per ", ing$portion_name, ")")
+    )
+    radioButtons(
+      inputId  = "dedupe_keeper",
+      label    = "Which one to keep",
+      choices  = choices,
+      selected = character(0)
+    )
+  })
+
+  # Clear preview whenever the selection or keeper changes, so the user
+  # can't preview one set and confirm against another.
+  observeEvent(input$dedupe_selected, { preview_data(NULL) }, ignoreInit = TRUE)
+  observeEvent(input$dedupe_keeper,   { preview_data(NULL) }, ignoreInit = TRUE)
+
+  # Preview button
+  observeEvent(input$dedupe_preview_btn, {
+    req(con())
+    selected <- input$dedupe_selected
+    keeper   <- input$dedupe_keeper
+
+    if (is.null(selected) || length(selected) < 2) {
+      output$dedupe_status <- renderText("Select at least two ingredients.")
+      preview_data(NULL)
+      return()
+    }
+    if (is.null(keeper) || keeper == "") {
+      output$dedupe_status <- renderText("Choose which ingredient to keep.")
+      preview_data(NULL)
+      return()
+    }
+
+    keep_id  <- as.integer(keeper)
+    drop_ids <- setdiff(as.integer(selected), keep_id)
+
+    tryCatch({
+      pv <- preview_dedupe_ingredients(con(), keep_id, drop_ids)
+      if (nrow(pv) == 0) {
+        output$dedupe_status <- renderText(
+          "No meals reference the selected duplicates. Nothing to do."
+        )
+        preview_data(NULL)
+      } else {
+        preview_data(list(preview = pv, keep_id = keep_id, drop_ids = drop_ids))
+        output$dedupe_status <- renderText(
+          paste0("Preview ready: ", nrow(pv),
+                 " meal(s) will be updated. Click Confirm Dedupe to apply.")
+        )
+      }
+    }, error = function(e) {
+      output$dedupe_status <- renderText(paste("Error:", e$message))
+      preview_data(NULL)
+    })
+  })
+
+  # Preview table
+  output$dedupe_preview_table <- renderTable({
+    pd <- preview_data()
+    req(pd)
+    pd$preview[, c("meal_name", "before", "after",
+                   "grams_before_total", "grams_after")]
+  })
+
+  # Confirm button
+  observeEvent(input$dedupe_confirm_btn, {
+    req(con())
+    pd <- preview_data()
+    if (is.null(pd)) {
+      output$dedupe_status <- renderText(
+        "Nothing to confirm. Click Preview first."
+      )
+      return()
+    }
+
+    tryCatch({
+      result <- dedupe_ingredients(con(), pd$keep_id, pd$drop_ids)
+      output$dedupe_status <- renderText(sprintf(
+        "Dedupe complete: %d meal_ingredients rows rewritten, %d ingredient(s) removed.",
+        result[["rows_rewritten"]], result[["rows_deleted"]]
+      ))
+      preview_data(NULL)
+      ingredient_refresh(ingredient_refresh() + 1)
+      meal_refresh(meal_refresh() + 1)
+    }, error = function(e) {
+      output$dedupe_status <- renderText(paste("Error:", e$message))
+    })
+  })
+}

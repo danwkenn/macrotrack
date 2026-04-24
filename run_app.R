@@ -53,6 +53,7 @@ ui <- fluidPage(
       add_user_ui(),
       modify_user_ui(),
       remove_items_ui(),
+      deduplicate_ingredients_ui(),
       settings_ui()
     )
   )
@@ -164,6 +165,8 @@ server <- function(input, output, session) {
   remove_items_server(input, output, session, con,
                       user_refresh, meal_refresh,
                       plan_refresh, ingredient_refresh)
+  deduplicate_ingredients_server(input, output, session, con,
+                                 ingredient_refresh, meal_refresh)
   settings_server(input, output, session, con,
                   user_refresh, meal_refresh,
                   plan_refresh, ingredient_refresh)

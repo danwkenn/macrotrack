@@ -5,6 +5,6 @@ account: dkenn
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 17188573
-bundleId: 11882731
+bundleId: 11899753
 url: https://dkenn.shinyapps.io/meal-planner/
 version: 1
