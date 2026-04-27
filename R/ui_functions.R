@@ -11,6 +11,8 @@ meal_planner_ui <- function() {
     br(),
     uiOutput("meal_planner"),
     hr(),
+    uiOutput("extra_ingredients"),
+    hr(),
     uiOutput("daily_summary"),hr(),
     downloadButton("download_report", "Download Report", class = "btn-info")
   )

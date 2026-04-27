@@ -47,9 +47,13 @@ kable(params$slots, format = "html",
 ```{r meals, results='asis'}
 for (i in seq_along(params$meal_details)) {
   meal <- params$meal_details[[i]]
-  
-  cat(paste0("\n\n### Slot ", i, " — ", meal$slot_name, ": ", meal$meal_name,
-             " (", meal$servings, " serving(s))\n\n"))
+
+  if (isTRUE(meal$is_additional)) {
+    cat("\n\n### Additional Ingredients\n\n")
+  } else {
+    cat(paste0("\n\n### Slot ", i, " — ", meal$slot_name, ": ", meal$meal_name,
+               " (", meal$servings, " serving(s))\n\n"))
+  }
   
   tbl <- kable(meal$ingredients, format = "html",
         col.names = c("Ingredient", "Portions", "Calories", 

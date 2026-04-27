@@ -12,7 +12,10 @@
 #'
 #' @export
 meal_planner_server <- function(input, output, session, con,
-                                meal_choices, user_choices) {
+                                meal_choices, user_choices,
+                                ingredient_choices) {
+
+  n_extra_ingredients <- 10
 
   # Toggle state for the 10 extra (hidden by default) slots
   show_extra_slots <- reactiveVal(FALSE)
@@ -88,6 +91,110 @@ meal_planner_server <- function(input, output, session, con,
     })
   })
 
+  # --- Additional individual ingredients ---
+  # Toggle state for the (hidden by default) ingredient slots
+  show_extra_ingredients <- reactiveVal(FALSE)
+
+  observeEvent(input$toggle_extra_ingredients, {
+    show_extra_ingredients(!show_extra_ingredients())
+    updateActionButton(
+      session, "toggle_extra_ingredients",
+      label = if (show_extra_ingredients())
+                "Hide individual ingredients"
+              else
+                "Add individual ingredients"
+    )
+  })
+
+  output$show_extra_ingredients <- reactive({ show_extra_ingredients() })
+  outputOptions(output, "show_extra_ingredients", suspendWhenHidden = FALSE)
+
+  ingredient_slot_row <- function(i, choices_val) {
+    fluidRow(
+      column(5,
+        selectizeInput(
+          inputId  = paste0("extra_ing_", i),
+          label    = paste("Ingredient", i),
+          choices  = c("None" = "", choices_val),
+          selected = "",
+          options  = list(placeholder = "Search for an ingredient...")
+        )
+      ),
+      column(2,
+        numericInput(
+          inputId = paste0("extra_portions_", i),
+          label   = "Portions",
+          value   = 1,
+          min     = 0.5,
+          step    = 0.5
+        )
+      ),
+      column(5,
+        tableOutput(paste0("extra_macros_", i))
+      )
+    )
+  }
+
+  output$extra_ingredients <- renderUI({
+    req(con())
+    choices <- ingredient_choices()
+    tagList(
+      actionButton("toggle_extra_ingredients",
+                   "Add individual ingredients", class = "btn-default"),
+      br(), br(),
+      conditionalPanel(
+        condition = "output.show_extra_ingredients == true",
+        h4("Additional Ingredients"),
+        lapply(seq_len(n_extra_ingredients),
+               function(i) ingredient_slot_row(i, choices))
+      )
+    )
+  })
+
+  # Returns one row (ingredient, portions, calories, protein, carbs, fat) for
+  # the additional-ingredient slot i, or NULL if the slot is empty/invalid.
+  extra_ingredient_row <- function(i) {
+    ingredient_id <- input[[paste0("extra_ing_", i)]]
+    portions      <- input[[paste0("extra_portions_", i)]]
+    if (is.null(ingredient_id) || ingredient_id == "") return(NULL)
+    if (is.null(portions) || is.na(portions) || portions <= 0) return(NULL)
+
+    ingredient <- DBI::dbGetQuery(
+      con(),
+      "SELECT name, calories, protein, carbs, fat, portion_size
+       FROM ingredients
+       WHERE ingredient_id = $1",
+      params = list(as.integer(ingredient_id))
+    )
+    if (nrow(ingredient) == 0) return(NULL)
+
+    factor <- (ingredient$portion_size / 100) * portions
+    data.frame(
+      ingredient = ingredient$name,
+      portions   = portions,
+      calories   = round(ingredient$calories * factor, 1),
+      protein    = round(ingredient$protein  * factor, 1),
+      carbs      = round(ingredient$carbs    * factor, 1),
+      fat        = round(ingredient$fat      * factor, 1)
+    )
+  }
+
+  # Combined extras across all slots: NULL if no slots populated.
+  extra_ingredients_combined <- function() {
+    rows <- lapply(seq_len(n_extra_ingredients), extra_ingredient_row)
+    rows <- Filter(Negate(is.null), rows)
+    if (length(rows) == 0) return(NULL)
+    do.call(rbind, rows)
+  }
+
+  # Per-slot macro tables
+  lapply(seq_len(n_extra_ingredients), function(i) {
+    output[[paste0("extra_macros_", i)]] <- renderTable({
+      req(con())
+      extra_ingredient_row(i)
+    })
+  })
+
   # Render daily summary and targets section
   output$daily_summary <- renderUI({
     req(con())
@@ -137,14 +244,29 @@ meal_planner_server <- function(input, output, session, con,
       get_meal_macros(con(), as.integer(meal_id), servings)
     })
     summaries <- Filter(Negate(is.null), summaries)
-    if (length(summaries) == 0) return(NULL)
-    combined <- data.table::rbindlist(summaries)
-    planned  <- combined[, .(
-      calories = sum(calories),
-      protein  = sum(protein),
-      carbs    = sum(carbs),
-      fat      = sum(fat)
-    )]
+    extras    <- extra_ingredients_combined()
+    if (length(summaries) == 0 && is.null(extras)) return(NULL)
+
+    if (length(summaries) > 0) {
+      combined <- data.table::rbindlist(summaries)
+      planned  <- combined[, .(
+        calories = sum(calories),
+        protein  = sum(protein),
+        carbs    = sum(carbs),
+        fat      = sum(fat)
+      )]
+    } else {
+      planned <- data.table::data.table(
+        calories = 0, protein = 0, carbs = 0, fat = 0
+      )
+    }
+    if (!is.null(extras)) {
+      planned$calories <- planned$calories + sum(extras$calories)
+      planned$protein  <- planned$protein  + sum(extras$protein)
+      planned$carbs    <- planned$carbs    + sum(extras$carbs)
+      planned$fat      <- planned$fat      + sum(extras$fat)
+    }
+
     full_targets <- c(input$target_calories, input$target_protein,
                       input$target_carbs,    input$target_fat)
     pct          <- input$pct_to_plan / 100
@@ -196,14 +318,28 @@ meal_planner_server <- function(input, output, session, con,
         if (is.null(meal_id) || meal_id == "") return(NULL)
         get_meal_macros(con(), as.integer(meal_id), servings)
       })
-      summaries    <- Filter(Negate(is.null), summaries)
-      combined     <- data.table::rbindlist(summaries)
-      planned      <- combined[, .(
-        calories = sum(calories),
-        protein  = sum(protein),
-        carbs    = sum(carbs),
-        fat      = sum(fat)
-      )]
+      summaries <- Filter(Negate(is.null), summaries)
+      extras    <- extra_ingredients_combined()
+
+      if (length(summaries) > 0) {
+        combined <- data.table::rbindlist(summaries)
+        planned  <- combined[, .(
+          calories = sum(calories),
+          protein  = sum(protein),
+          carbs    = sum(carbs),
+          fat      = sum(fat)
+        )]
+      } else {
+        planned <- data.table::data.table(
+          calories = 0, protein = 0, carbs = 0, fat = 0
+        )
+      }
+      if (!is.null(extras)) {
+        planned$calories <- planned$calories + sum(extras$calories)
+        planned$protein  <- planned$protein  + sum(extras$protein)
+        planned$carbs    <- planned$carbs    + sum(extras$carbs)
+        planned$fat      <- planned$fat      + sum(extras$fat)
+      }
       planned_vals <- round(c(planned$calories, planned$protein,
                               planned$carbs,    planned$fat), 1)
       diff         <- planned_vals - planning
@@ -233,6 +369,13 @@ meal_planner_server <- function(input, output, session, con,
           servings  = servings
         )
       }))
+      if (!is.null(extras)) {
+        slots_df <- rbind(slots_df, data.frame(
+          slot_name = "Additional Ingredients",
+          meal_name = "Additional Ingredients",
+          servings  = 1
+        ))
+      }
 
       # --- Meal details list ---
       meal_details <- lapply(1:20, function(i) {
@@ -298,6 +441,25 @@ meal_planner_server <- function(input, output, session, con,
         )
       })
       meal_details <- Filter(Negate(is.null), meal_details)
+
+      # Append Additional Ingredients as a synthetic "meal" entry
+      if (!is.null(extras)) {
+        totals_row <- data.frame(
+          ingredient = "Total",
+          portions   = NA,
+          calories   = sum(extras$calories),
+          protein    = sum(extras$protein),
+          carbs      = sum(extras$carbs),
+          fat        = sum(extras$fat)
+        )
+        meal_details <- c(meal_details, list(list(
+          slot_name     = "Additional Ingredients",
+          meal_name     = "Additional Ingredients",
+          servings      = 1,
+          is_additional = TRUE,
+          ingredients   = rbind(extras, totals_row)
+        )))
+      }
 
       # --- Render the report ---
       rmarkdown::render(

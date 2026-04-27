@@ -154,7 +154,8 @@ server <- function(input, output, session) {
   })
 
   # --- Wire up tab servers ---
-  meal_planner_server(input, output, session, con, meal_choices, user_choices)
+  meal_planner_server(input, output, session, con,
+                      meal_choices, user_choices, ingredient_choices)
   import_meal_server(input, output, session, con, meal_refresh)
   add_ingredients_server(input, output, session, con, ingredient_refresh)
   add_ingredient_by_serving_server(input, output, session, con, ingredient_refresh)
