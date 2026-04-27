@@ -14,47 +14,71 @@
 meal_planner_server <- function(input, output, session, con,
                                 meal_choices, user_choices) {
 
+  # Toggle state for the 10 extra (hidden by default) slots
+  show_extra_slots <- reactiveVal(FALSE)
+
+  observeEvent(input$toggle_extra_slots, {
+    show_extra_slots(!show_extra_slots())
+    updateActionButton(
+      session, "toggle_extra_slots",
+      label = if (show_extra_slots()) "Hide extra slots" else "Show 10 more slots"
+    )
+  })
+
+  output$show_extra_slots <- reactive({ show_extra_slots() })
+  outputOptions(output, "show_extra_slots", suspendWhenHidden = FALSE)
+
+  slot_row <- function(i, meal_choices) {
+    fluidRow(
+      column(3,
+        textInput(
+          inputId = paste0("slot_name_", i),
+          label   = paste("Slot", i, "Name"),
+          value   = ""
+        )
+      ),
+      column(3,
+        selectizeInput(
+          inputId  = paste0("meal_", i),
+          label    = "Meal",
+          choices  = c("None" = "", meal_choices),
+          selected = "",
+          options  = list(placeholder = "Search for a meal...")
+        )
+      ),
+      column(2,
+        numericInput(
+          inputId = paste0("servings_", i),
+          label   = "Servings",
+          value   = 1,
+          min     = 0.5,
+          step    = 0.5
+        )
+      ),
+      column(4,
+        tableOutput(paste0("macros_", i))
+      )
+    )
+  }
+
   # Render the meal planner UI once database is connected
   output$meal_planner <- renderUI({
     req(con())
+    choices <- meal_choices()
     tagList(
-      lapply(1:10, function(i) {
-        fluidRow(
-          column(3,
-            textInput(
-              inputId = paste0("slot_name_", i),
-              label   = paste("Slot", i, "Name"),
-              value   = ""
-            )
-          ),
-          column(3,
-            selectizeInput(
-              inputId  = paste0("meal_", i),
-              label    = "Meal",
-              choices  = c("None" = "", meal_choices()),
-              selected = "",
-              options  = list(placeholder = "Search for a meal...")
-            )
-          ),
-          column(2,
-            numericInput(
-              inputId = paste0("servings_", i),
-              label   = "Servings",
-              value   = 1,
-              min     = 0.5,
-              step    = 0.5
-            )
-          ),
-          column(4,
-            tableOutput(paste0("macros_", i))
-          )
-        )
-      })
+      lapply(1:10, function(i) slot_row(i, choices)),
+      br(),
+      actionButton("toggle_extra_slots", "Show 10 more slots", class = "btn-default"),
+      br(), br(),
+      conditionalPanel(
+        condition = "output.show_extra_slots == true",
+        lapply(11:20, function(i) slot_row(i, choices))
+      )
     )
   })
 
   # Render macros for each slot
-  lapply(1:10, function(i) {
+  lapply(1:20, function(i) {
     output[[paste0("macros_", i)]] <- renderTable({
       req(con())
       meal_id  <- input[[paste0("meal_", i)]]
@@ -106,7 +130,7 @@ meal_planner_server <- function(input, output, session, con,
   # Render comparison table
   output$comparison_table <- renderTable({
     req(con())
-    summaries <- lapply(1:10, function(i) {
+    summaries <- lapply(1:20, function(i) {
       meal_id  <- input[[paste0("meal_", i)]]
       servings <- input[[paste0("servings_", i)]]
       if (is.null(meal_id) || meal_id == "") return(NULL)
@@ -166,7 +190,7 @@ meal_planner_server <- function(input, output, session, con,
       in_reserve   <- round(full_targets * (1 - pct), 1)
 
       # Collect planned totals
-      summaries <- lapply(1:10, function(i) {
+      summaries <- lapply(1:20, function(i) {
         meal_id  <- input[[paste0("meal_", i)]]
         servings <- input[[paste0("servings_", i)]]
         if (is.null(meal_id) || meal_id == "") return(NULL)
@@ -196,7 +220,7 @@ meal_planner_server <- function(input, output, session, con,
       )
 
       # --- Slots table ---
-      slots_df <- do.call(rbind, lapply(1:10, function(i) {
+      slots_df <- do.call(rbind, lapply(1:20, function(i) {
         meal_id   <- input[[paste0("meal_", i)]]
         slot_name <- input[[paste0("slot_name_", i)]]
         servings  <- input[[paste0("servings_", i)]]
@@ -211,7 +235,7 @@ meal_planner_server <- function(input, output, session, con,
       }))
 
       # --- Meal details list ---
-      meal_details <- lapply(1:10, function(i) {
+      meal_details <- lapply(1:20, function(i) {
         meal_id   <- input[[paste0("meal_", i)]]
         slot_name <- input[[paste0("slot_name_", i)]]
         servings  <- input[[paste0("servings_", i)]]
