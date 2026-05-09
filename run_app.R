@@ -45,6 +45,7 @@ ui <- fluidPage(
     condition = "output.is_connected == true",
     tabsetPanel(
       meal_planner_ui(),
+      meal_planner_beta_ui(),
       build_meal_ui(),
       build_plan_ui(),
       import_meal_ui(),
@@ -156,6 +157,8 @@ server <- function(input, output, session) {
   # --- Wire up tab servers ---
   meal_planner_server(input, output, session, con,
                       meal_choices, user_choices, ingredient_choices)
+  meal_planner_beta_server(input, output, session, con,
+                           meal_choices, user_choices, ingredient_choices)
   import_meal_server(input, output, session, con, meal_refresh)
   add_ingredients_server(input, output, session, con, ingredient_refresh)
   add_ingredient_by_serving_server(input, output, session, con, ingredient_refresh)

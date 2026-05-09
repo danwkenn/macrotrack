@@ -18,6 +18,68 @@ meal_planner_ui <- function() {
   )
 }
 
+#' Meal Planner (beta) Tab UI
+#'
+#' Returns the UI for the search-and-add style meal planner tab.
+#' Meals and individual ingredients are searched, given a slot
+#' name / portions, and added to running tables.
+#'
+#' @return A shiny tabPanel object.
+#'
+#' @export
+meal_planner_beta_ui <- function() {
+  tabPanel("Meal Planner (beta)",
+    br(),
+    h4("Add Meals"),
+    fluidRow(
+      column(4, uiOutput("mpb_meal_select")),
+      column(2, textInput("mpb_slot_name", "Slot Name (e.g. Breakfast)")),
+      column(2, numericInput("mpb_servings", "Servings",
+                             value = 1, min = 0.5, step = 0.5)),
+      column(2,
+        br(),
+        actionButton("mpb_add_meal_btn", "Add", class = "btn-success")
+      )
+    ),
+    br(),
+    tableOutput("mpb_meals_table"),
+    fluidRow(
+      column(2,
+        actionButton("mpb_clear_meals_btn", "Clear meals", class = "btn-warning")
+      )
+    ),
+    hr(),
+    h4("Add Individual Ingredients"),
+    fluidRow(
+      column(4, uiOutput("mpb_ing_select")),
+      column(2, numericInput("mpb_ing_portions", "Portions",
+                             value = 1, min = 0.5, step = 0.5)),
+      column(2,
+        br(),
+        actionButton("mpb_add_ing_btn", "Add", class = "btn-success")
+      )
+    ),
+    br(),
+    tableOutput("mpb_ings_table"),
+    fluidRow(
+      column(2,
+        actionButton("mpb_clear_ings_btn", "Clear ingredients",
+                     class = "btn-warning")
+      )
+    ),
+    hr(),
+    uiOutput("mpb_daily_summary"),
+    hr(),
+    actionButton("mpb_view_report_btn", "View Report", class = "btn-info"),
+    tags$script(HTML(paste(
+      "Shiny.addCustomMessageHandler('mpb_open_report', function(url) {",
+      "  window.open(url, '_blank');",
+      "});",
+      sep = "\n"
+    )))
+  )
+}
+
 #' Import Meal Tab UI
 #'
 #' Returns the UI for the import meal tab, allowing the user to

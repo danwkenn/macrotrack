@@ -480,6 +480,410 @@ meal_planner_server <- function(input, output, session, con,
 
 }
 
+#' Meal Planner (beta) Tab Server
+#'
+#' Search-and-add style meal planner. Meals and individual ingredients
+#' are added to running reactive tables; macros and targets are
+#' summarised in the same way as the original meal planner tab, and
+#' the download uses the same report template.
+#'
+#' @param input Shiny input object.
+#' @param output Shiny output object.
+#' @param session Shiny session object.
+#' @param con A reactiveVal containing the database connection.
+#' @param meal_choices A reactive expression returning available meals.
+#' @param user_choices A reactive expression returning available users.
+#' @param ingredient_choices A reactive expression returning available ingredients.
+#'
+#' @export
+meal_planner_beta_server <- function(input, output, session, con,
+                                     meal_choices, user_choices,
+                                     ingredient_choices) {
+
+  empty_meals <- data.frame(
+    meal_id   = integer(),
+    slot_name = character(),
+    meal_name = character(),
+    servings  = numeric(),
+    calories  = numeric(),
+    protein   = numeric(),
+    carbs     = numeric(),
+    fat       = numeric(),
+    stringsAsFactors = FALSE
+  )
+
+  empty_ings <- data.frame(
+    ingredient_id = integer(),
+    ingredient    = character(),
+    portions      = numeric(),
+    calories      = numeric(),
+    protein       = numeric(),
+    carbs         = numeric(),
+    fat           = numeric(),
+    stringsAsFactors = FALSE
+  )
+
+  meals_in_plan <- reactiveVal(empty_meals)
+  ings_in_plan  <- reactiveVal(empty_ings)
+
+  # --- Session-scoped resource path for serving the rendered HTML report ---
+  resource_prefix <- paste0("mpb_reports_", session$token)
+  report_dir      <- file.path(tempdir(), resource_prefix)
+  dir.create(report_dir, showWarnings = FALSE, recursive = TRUE)
+  shiny::addResourcePath(resource_prefix, report_dir)
+  session$onSessionEnded(function() {
+    try(shiny::removeResourcePath(resource_prefix), silent = TRUE)
+    unlink(report_dir, recursive = TRUE)
+  })
+
+  # --- Search dropdowns ---
+  output$mpb_meal_select <- renderUI({
+    req(con())
+    selectizeInput(
+      inputId = "mpb_meal_id",
+      label   = "Search Meal",
+      choices = c("None" = "", meal_choices()),
+      options = list(placeholder = "Type to search...")
+    )
+  })
+
+  output$mpb_ing_select <- renderUI({
+    req(con())
+    selectizeInput(
+      inputId = "mpb_ing_id",
+      label   = "Search Ingredient",
+      choices = c("None" = "", ingredient_choices()),
+      options = list(placeholder = "Type to search...")
+    )
+  })
+
+  # --- Add meal ---
+  observeEvent(input$mpb_add_meal_btn, {
+    req(con())
+    req(input$mpb_meal_id != "")
+    servings <- input$mpb_servings
+    req(!is.null(servings) && !is.na(servings) && servings > 0)
+
+    macros <- get_meal_macros(con(), as.integer(input$mpb_meal_id), servings)
+
+    slot_name_in <- if (is.null(input$mpb_slot_name)) "" else input$mpb_slot_name
+
+    new_row <- data.frame(
+      meal_id   = as.integer(input$mpb_meal_id),
+      slot_name = slot_name_in,
+      meal_name = macros$meal_name,
+      servings  = servings,
+      calories  = macros$calories,
+      protein   = macros$protein,
+      carbs     = macros$carbs,
+      fat       = macros$fat,
+      stringsAsFactors = FALSE
+    )
+    meals_in_plan(rbind(meals_in_plan(), new_row))
+
+    updateSelectizeInput(session, "mpb_meal_id", selected = "")
+    updateTextInput(session,      "mpb_slot_name", value = "")
+    updateNumericInput(session,   "mpb_servings",  value = 1)
+  })
+
+  observeEvent(input$mpb_clear_meals_btn, {
+    meals_in_plan(empty_meals)
+  })
+
+  # --- Add individual ingredient ---
+  observeEvent(input$mpb_add_ing_btn, {
+    req(con())
+    req(input$mpb_ing_id != "")
+    portions <- input$mpb_ing_portions
+    req(!is.null(portions) && !is.na(portions) && portions > 0)
+
+    ingredient <- DBI::dbGetQuery(
+      con(),
+      "SELECT name, calories, protein, carbs, fat, portion_size
+       FROM ingredients
+       WHERE ingredient_id = $1",
+      params = list(as.integer(input$mpb_ing_id))
+    )
+    req(nrow(ingredient) > 0)
+
+    factor <- (ingredient$portion_size / 100) * portions
+    new_row <- data.frame(
+      ingredient_id = as.integer(input$mpb_ing_id),
+      ingredient    = ingredient$name,
+      portions      = portions,
+      calories      = round(ingredient$calories * factor, 1),
+      protein       = round(ingredient$protein  * factor, 1),
+      carbs         = round(ingredient$carbs    * factor, 1),
+      fat           = round(ingredient$fat      * factor, 1),
+      stringsAsFactors = FALSE
+    )
+    ings_in_plan(rbind(ings_in_plan(), new_row))
+
+    updateSelectizeInput(session, "mpb_ing_id",       selected = "")
+    updateNumericInput(session,   "mpb_ing_portions", value = 1)
+  })
+
+  observeEvent(input$mpb_clear_ings_btn, {
+    ings_in_plan(empty_ings)
+  })
+
+  # --- Running tables ---
+  output$mpb_meals_table <- renderTable({
+    df <- meals_in_plan()
+    req(nrow(df) > 0)
+    display <- df
+    display$slot_name <- ifelse(is.na(display$slot_name) | display$slot_name == "",
+                                display$meal_name, display$slot_name)
+    display[, c("slot_name", "meal_name", "servings",
+                "calories", "protein", "carbs", "fat")]
+  })
+
+  output$mpb_ings_table <- renderTable({
+    df <- ings_in_plan()
+    req(nrow(df) > 0)
+    df[, c("ingredient", "portions",
+           "calories", "protein", "carbs", "fat")]
+  })
+
+  # --- Daily summary & targets ---
+  output$mpb_daily_summary <- renderUI({
+    req(con())
+    tagList(
+      h3("Daily Summary & Targets"),
+      fluidRow(
+        column(4,
+          selectizeInput(
+            inputId = "mpb_selected_user",
+            label   = "Select User",
+            choices = c("None" = "", user_choices()),
+            options = list(placeholder = "Type a name...")
+          )
+        ),
+        column(3,
+          numericInput("mpb_pct_to_plan", "% of targets to plan for",
+                       value = 100, min = 1, max = 100, step = 1)
+        )
+      ),
+      fluidRow(
+        column(3, numericInput("mpb_target_calories", "Target Calories",    value = NA)),
+        column(3, numericInput("mpb_target_protein",  "Target Protein (g)", value = NA)),
+        column(3, numericInput("mpb_target_carbs",    "Target Carbs (g)",   value = NA)),
+        column(3, numericInput("mpb_target_fat",      "Target Fat (g)",     value = NA))
+      ),
+      tableOutput("mpb_comparison_table")
+    )
+  })
+
+  observeEvent(input$mpb_selected_user, {
+    req(input$mpb_selected_user != "")
+    targets <- get_user_targets(con(), as.integer(input$mpb_selected_user))
+    updateNumericInput(session, "mpb_target_calories", value = targets$calories)
+    updateNumericInput(session, "mpb_target_protein",  value = targets$protein)
+    updateNumericInput(session, "mpb_target_carbs",    value = targets$carbs)
+    updateNumericInput(session, "mpb_target_fat",      value = targets$fat)
+  })
+
+  # Combined planned totals across meals + extras
+  planned_totals <- function() {
+    meals_df <- meals_in_plan()
+    ings_df  <- ings_in_plan()
+    cal <- (if (nrow(meals_df) > 0) sum(meals_df$calories) else 0) +
+           (if (nrow(ings_df)  > 0) sum(ings_df$calories)  else 0)
+    pro <- (if (nrow(meals_df) > 0) sum(meals_df$protein)  else 0) +
+           (if (nrow(ings_df)  > 0) sum(ings_df$protein)   else 0)
+    car <- (if (nrow(meals_df) > 0) sum(meals_df$carbs)    else 0) +
+           (if (nrow(ings_df)  > 0) sum(ings_df$carbs)     else 0)
+    fat <- (if (nrow(meals_df) > 0) sum(meals_df$fat)      else 0) +
+           (if (nrow(ings_df)  > 0) sum(ings_df$fat)       else 0)
+    c(calories = cal, protein = pro, carbs = car, fat = fat)
+  }
+
+  output$mpb_comparison_table <- renderTable({
+    if (nrow(meals_in_plan()) == 0 && nrow(ings_in_plan()) == 0) return(NULL)
+
+    full_targets <- c(input$mpb_target_calories, input$mpb_target_protein,
+                      input$mpb_target_carbs,    input$mpb_target_fat)
+    pct          <- input$mpb_pct_to_plan / 100
+    planning     <- round(full_targets * pct, 1)
+    in_reserve   <- round(full_targets * (1 - pct), 1)
+    totals       <- planned_totals()
+    planned_vals <- round(unname(totals), 1)
+    diff         <- planned_vals - planning
+
+    data.frame(
+      Macro           = c("Calories", "Protein (g)", "Carbs (g)", "Fat (g)"),
+      Full.Target     = full_targets,
+      In.Reserve      = in_reserve,
+      Planning.Target = planning,
+      Planned         = planned_vals,
+      Difference      = ifelse(diff >= 0,
+                               paste0("+", round(diff, 1)),
+                               as.character(round(diff, 1)))
+    )
+  })
+
+  # --- View report (opens in a new browser tab) ---
+  observeEvent(input$mpb_view_report_btn, {
+    req(con())
+
+    meals_df <- meals_in_plan()
+    ings_df  <- ings_in_plan()
+
+      user_name <- if (!is.null(input$mpb_selected_user) &&
+                       input$mpb_selected_user != "") {
+        DBI::dbGetQuery(con(), "SELECT name FROM users WHERE user_id = $1",
+                        params = list(as.integer(input$mpb_selected_user)))$name
+      } else {
+        "Unknown"
+      }
+
+      full_targets <- c(input$mpb_target_calories, input$mpb_target_protein,
+                        input$mpb_target_carbs,    input$mpb_target_fat)
+      pct          <- input$mpb_pct_to_plan / 100
+      planning     <- round(full_targets * pct, 1)
+      in_reserve   <- round(full_targets * (1 - pct), 1)
+      totals       <- planned_totals()
+      planned_vals <- round(unname(totals), 1)
+      diff         <- planned_vals - planning
+
+      targets_df <- data.frame(
+        Macro           = c("Calories", "Protein (g)", "Carbs (g)", "Fat (g)"),
+        Full.Target     = full_targets,
+        In.Reserve      = in_reserve,
+        Planning.Target = planning,
+        Planned         = planned_vals,
+        Difference      = ifelse(diff >= 0,
+                                 paste0("+", round(diff, 1)),
+                                 as.character(round(diff, 1)))
+      )
+
+      # --- Slots table ---
+      slots_df <- data.frame(
+        slot_name = character(),
+        meal_name = character(),
+        servings  = numeric(),
+        stringsAsFactors = FALSE
+      )
+      if (nrow(meals_df) > 0) {
+        slots_df <- rbind(slots_df, data.frame(
+          slot_name = ifelse(is.na(meals_df$slot_name) | meals_df$slot_name == "",
+                             meals_df$meal_name, meals_df$slot_name),
+          meal_name = meals_df$meal_name,
+          servings  = meals_df$servings,
+          stringsAsFactors = FALSE
+        ))
+      }
+      if (nrow(ings_df) > 0) {
+        slots_df <- rbind(slots_df, data.frame(
+          slot_name = "Additional Ingredients",
+          meal_name = "Additional Ingredients",
+          servings  = 1,
+          stringsAsFactors = FALSE
+        ))
+      }
+
+      # --- Meal details list ---
+      meal_details <- list()
+      if (nrow(meals_df) > 0) {
+        meal_details <- lapply(seq_len(nrow(meals_df)), function(i) {
+          row <- meals_df[i, ]
+          sql <- "
+            SELECT
+              i.name          AS ingredient,
+              mi.quantity     AS portions,
+              i.portion_size,
+              i.calories,
+              i.protein,
+              i.carbs,
+              i.fat
+            FROM meal_ingredients mi
+            JOIN ingredients i ON mi.ingredient_id = i.ingredient_id
+            WHERE mi.meal_id = $1
+          "
+          ingredients <- DBI::dbGetQuery(con(), sql,
+                                         params = list(as.integer(row$meal_id)))
+
+          if (nrow(ingredients) > 0) {
+            ingredients$calories <- round((ingredients$portion_size / 100) *
+                                            ingredients$calories *
+                                            ingredients$portions * row$servings, 1)
+            ingredients$protein  <- round((ingredients$portion_size / 100) *
+                                            ingredients$protein *
+                                            ingredients$portions * row$servings, 1)
+            ingredients$carbs    <- round((ingredients$portion_size / 100) *
+                                            ingredients$carbs *
+                                            ingredients$portions * row$servings, 1)
+            ingredients$fat      <- round((ingredients$portion_size / 100) *
+                                            ingredients$fat *
+                                            ingredients$portions * row$servings, 1)
+            totals_row <- data.frame(
+              ingredient   = "Total",
+              portions     = NA,
+              portion_size = NA,
+              calories     = sum(ingredients$calories),
+              protein      = sum(ingredients$protein),
+              carbs        = sum(ingredients$carbs),
+              fat          = sum(ingredients$fat)
+            )
+            ingredients <- rbind(ingredients, totals_row)
+            ingredients$portion_size <- NULL
+          }
+
+          list(
+            slot_name   = if (is.na(row$slot_name) || row$slot_name == "")
+                            row$meal_name else row$slot_name,
+            meal_name   = row$meal_name,
+            servings    = row$servings,
+            ingredients = ingredients
+          )
+        })
+      }
+
+      if (nrow(ings_df) > 0) {
+        extras <- ings_df[, c("ingredient", "portions",
+                              "calories", "protein", "carbs", "fat")]
+        totals_row <- data.frame(
+          ingredient = "Total",
+          portions   = NA,
+          calories   = sum(extras$calories),
+          protein    = sum(extras$protein),
+          carbs      = sum(extras$carbs),
+          fat        = sum(extras$fat)
+        )
+        meal_details <- c(meal_details, list(list(
+          slot_name     = "Additional Ingredients",
+          meal_name     = "Additional Ingredients",
+          servings      = 1,
+          is_additional = TRUE,
+          ingredients   = rbind(extras, totals_row)
+        )))
+      }
+
+      filename    <- paste0("meal_plan_",
+                            format(Sys.time(), "%Y%m%d_%H%M%S"), ".html")
+      output_path <- file.path(report_dir, filename)
+
+      rmarkdown::render(
+        input       = "templates/meal_plan_report.Rmd",
+        output_file = output_path,
+        params      = list(
+          user_name    = user_name,
+          report_date  = Sys.Date(),
+          targets      = targets_df,
+          pct_to_plan  = pct,
+          slots        = slots_df,
+          meal_details = meal_details
+        ),
+        envir = new.env(parent = globalenv())
+      )
+
+      session$sendCustomMessage(
+        "mpb_open_report",
+        paste0(resource_prefix, "/", filename)
+      )
+  })
+}
+
 #' Import Meal Tab Server
 #'
 #' Server logic for the import meal tab, handling CSV file selection

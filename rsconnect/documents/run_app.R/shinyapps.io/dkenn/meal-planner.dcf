@@ -1,10 +1,9 @@
 name: meal-planner
 title: Nutrition Tracker
-username: dkenn
+username:
 account: dkenn
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 17188573
-bundleId: 11899753
+bundleId: 11951461
 url: https://dkenn.shinyapps.io/meal-planner/
-version: 1
