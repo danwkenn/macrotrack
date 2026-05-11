@@ -526,6 +526,92 @@ settings_ui <- function() {
   )
 }
 
+#' Biometrics Tab UI
+#'
+#' Returns the UI for the biometrics tab. The user picks a target user,
+#' selects an existing measurement type, sees its prompt, enters a value,
+#' optionally stages one or more context rows, then submits the
+#' measurement and its context to the database in a single transaction.
+#' A second section creates new measurement types.
+#'
+#' @return A shiny tabPanel object.
+#' @export
+biometrics_ui <- function() {
+  tabPanel("Biometrics",
+    br(),
+
+    h4("Select User"),
+    uiOutput("biom_user_select"),
+
+    hr(),
+
+    h4("Input Metric"),
+    uiOutput("biom_metric_select"),
+    uiOutput("biom_prompt_display"),
+    fluidRow(
+      column(4, textInput("biom_value", "Value")),
+      column(3, dateInput("biom_date", "Date", value = Sys.Date())),
+      column(2, textInput("biom_time", "Time (HH:MM)",
+                          value = format(Sys.time(), "%H:%M")))
+    ),
+    fluidRow(
+      column(8, textAreaInput("biom_notes", "Notes (optional)",
+                              value = "", rows = 2))
+    ),
+    br(),
+    h5("Context"),
+    fluidRow(
+      column(4, uiOutput("biom_context_type_select")),
+      column(4, textInput("biom_context_value", "Context Value"))
+    ),
+    fluidRow(
+      column(6,
+        actionButton("biom_log_context_btn",
+                     "Log (only added to database with 'Submit')",
+                     class = "btn-info"),
+        actionButton("biom_clear_context_btn", "Clear Context",
+                     class = "btn-warning")
+      )
+    ),
+    br(),
+    tableOutput("biom_context_table"),
+    br(),
+    actionButton("biom_submit_btn", "Submit", class = "btn-primary"),
+    br(), br(),
+    textOutput("biom_submit_status"),
+
+    hr(),
+
+    h4("New Measurement"),
+    fluidRow(
+      column(4, textInput("biom_new_name",  "Name (unique key)")),
+      column(4, textInput("biom_new_label", "Label")),
+      column(4, uiOutput("biom_new_data_type_select"))
+    ),
+    fluidRow(
+      column(12, textAreaInput("biom_new_description",
+                               "Description (optional)", rows = 2))
+    ),
+    fluidRow(
+      column(12, textAreaInput("biom_new_prompt",
+                               "Prompt (shown when logging)", rows = 2))
+    ),
+    fluidRow(
+      column(3, textInput("biom_new_method", "Method (optional)")),
+      column(3, textInput("biom_new_unit",   "Unit (optional)")),
+      column(2, numericInput("biom_new_precision", "Precision",
+                             value = NA, min = 0, step = 1)),
+      column(2, numericInput("biom_new_min", "Min", value = NA)),
+      column(2, numericInput("biom_new_max", "Max", value = NA))
+    ),
+    br(),
+    actionButton("biom_new_save_btn", "Save Measurement Type",
+                 class = "btn-primary"),
+    br(), br(),
+    textOutput("biom_new_status")
+  )
+}
+
 #' Deduplicate Ingredients Tab UI
 #'
 #' Returns the UI for the deduplicate ingredients tab. The user selects

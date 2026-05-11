@@ -1,0 +1,6 @@
+data_type_id,label,description,base_type,possible_values,ordered
+character,Text,Free-form text. Stored as a character string.,character,,
+integer,Integer,Whole number with no fixed range.,integer,,
+numeric,Numeric,Real number with no fixed range.,numeric,,
+likert,Likert scale (1–5),Ordered categorical scale from 1 (lowest) to 5 (highest).,integer,"[1,2,3,4,5]",TRUE
+ordinal_1_to_10,Ordinal scale (1–10),Ordered categorical scale from 1 (lowest) to 10 (highest).,integer,"[1,2,3,4,5,6,7,8,9,10]",TRUE

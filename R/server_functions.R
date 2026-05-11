@@ -1967,3 +1967,273 @@ deduplicate_ingredients_server <- function(input, output, session, con,
     })
   })
 }
+
+#' Biometrics Tab Server
+#'
+#' Server logic for the biometrics tab. Renders the user, measurement,
+#' and context-type selectors; stages context rows in an in-memory
+#' data.frame via the Log / Clear Context buttons; and writes the
+#' measurement and its context to the database in a single transaction
+#' when Submit is clicked. Also handles inserts into measurement_type
+#' from the "New Measurement" form.
+#'
+#' @param input Shiny input object.
+#' @param output Shiny output object.
+#' @param session Shiny session object.
+#' @param con A reactiveVal containing the database connection.
+#' @param user_choices A reactive expression returning available users.
+#' @param measurement_type_refresh A reactiveVal used to trigger refresh
+#'   of the measurement_type dropdown after a new type is added.
+#'
+#' @export
+biometrics_server <- function(input, output, session, con,
+                              user_choices, measurement_type_refresh) {
+
+  # --- Select User ---
+  output$biom_user_select <- renderUI({
+    req(con())
+    selectizeInput(
+      inputId = "biom_user_id",
+      label   = "User",
+      choices = c("None" = "", user_choices()),
+      options = list(placeholder = "Type to search...")
+    )
+  })
+
+  # --- Measurement type choices ---
+  measurement_type_choices <- reactive({
+    req(con())
+    measurement_type_refresh()
+    mt <- DBI::dbGetQuery(con(), "
+      SELECT measurement_type_id, label
+      FROM measurement_type
+      WHERE active = TRUE
+      ORDER BY label
+    ")
+    if (nrow(mt) == 0) return(c("None" = ""))
+    c("None" = "", setNames(as.character(mt$measurement_type_id), mt$label))
+  })
+
+  output$biom_metric_select <- renderUI({
+    req(con())
+    selectizeInput(
+      inputId = "biom_metric_id",
+      label   = "Measurement",
+      choices = measurement_type_choices(),
+      options = list(placeholder = "Type to search...")
+    )
+  })
+
+  selected_metric <- reactive({
+    req(con())
+    req(input$biom_metric_id)
+    req(input$biom_metric_id != "")
+    DBI::dbGetQuery(
+      con(),
+      "SELECT * FROM measurement_type WHERE measurement_type_id = $1",
+      params = list(as.integer(input$biom_metric_id))
+    )
+  })
+
+  output$biom_prompt_display <- renderUI({
+    m <- tryCatch(selected_metric(), error = function(e) NULL)
+    if (is.null(m) || nrow(m) == 0) return(NULL)
+    wellPanel(strong("Prompt: "), m$prompt)
+  })
+
+  # --- Context type choices: distinct context_types previously used for
+  #     this measurement_type, plus the ability to type a new one. ---
+  existing_context_types <- reactive({
+    req(con())
+    req(input$biom_metric_id)
+    req(input$biom_metric_id != "")
+    res <- DBI::dbGetQuery(con(), "
+      SELECT DISTINCT mc.context_type
+      FROM measurement_context mc
+      JOIN measurements m ON m.measurement_id = mc.measurement_id
+      WHERE m.measurement_type_id = $1
+      ORDER BY mc.context_type
+    ", params = list(as.integer(input$biom_metric_id)))
+    res$context_type
+  })
+
+  output$biom_context_type_select <- renderUI({
+    types <- tryCatch(existing_context_types(), error = function(e) character())
+    selectizeInput(
+      inputId = "biom_context_type",
+      label   = "Context Type",
+      choices = c("", types),
+      options = list(
+        placeholder = "Type to search or add new...",
+        create      = TRUE
+      )
+    )
+  })
+
+  # --- Staged context rows ---
+  empty_context <- function() {
+    data.frame(context_type = character(),
+               value        = character(),
+               stringsAsFactors = FALSE)
+  }
+  context_buffer <- reactiveVal(empty_context())
+
+  observeEvent(input$biom_log_context_btn, {
+    ct <- input$biom_context_type
+    cv <- input$biom_context_value
+    req(!is.null(ct) && ct != "")
+    req(!is.null(cv) && cv != "")
+    context_buffer(rbind(
+      context_buffer(),
+      data.frame(context_type = ct, value = cv, stringsAsFactors = FALSE)
+    ))
+    updateTextInput(session, "biom_context_value", value = "")
+  })
+
+  observeEvent(input$biom_clear_context_btn, {
+    context_buffer(empty_context())
+  })
+
+  output$biom_context_table <- renderTable({
+    df <- context_buffer()
+    if (nrow(df) == 0) return(NULL)
+    df
+  })
+
+  # --- Submit ---
+  observeEvent(input$biom_submit_btn, {
+    req(con())
+    tryCatch({
+      if (is.null(input$biom_user_id) || input$biom_user_id == "")
+        stop("Select a user.")
+      if (is.null(input$biom_metric_id) || input$biom_metric_id == "")
+        stop("Select a measurement.")
+      if (is.null(input$biom_value) || input$biom_value == "")
+        stop("Enter a value.")
+
+      datetime_chr <- paste0(format(input$biom_date, "%Y-%m-%d"),
+                             " ", input$biom_time)
+      datetime <- as.POSIXct(datetime_chr, tz = "UTC",
+                             format = "%Y-%m-%d %H:%M")
+      if (is.na(datetime))
+        stop("Could not parse date/time. Use HH:MM for the time field.")
+
+      notes <- if (is.null(input$biom_notes) || input$biom_notes == "")
+                 NA_character_ else input$biom_notes
+
+      ctx <- context_buffer()
+
+      new_id <- DBI::dbWithTransaction(con(), {
+        inserted_id <- DBI::dbGetQuery(
+          con(),
+          "INSERT INTO measurements
+             (user_id, measurement_type_id, datetime, value, notes)
+           VALUES ($1, $2, $3, $4, $5)
+           RETURNING measurement_id",
+          params = list(
+            as.integer(input$biom_user_id),
+            as.integer(input$biom_metric_id),
+            datetime,
+            as.character(input$biom_value),
+            notes
+          )
+        )$measurement_id
+
+        if (nrow(ctx) > 0) {
+          DBI::dbExecute(
+            con(),
+            "INSERT INTO measurement_context
+               (measurement_id, context_type, value)
+             VALUES ($1, $2, $3)",
+            params = list(
+              rep(as.integer(inserted_id), nrow(ctx)),
+              as.character(ctx$context_type),
+              as.character(ctx$value)
+            )
+          )
+        }
+
+        inserted_id
+      })
+
+      output$biom_submit_status <- renderText(sprintf(
+        "Measurement logged (id=%d, %d context row(s)).",
+        new_id, nrow(ctx)))
+      context_buffer(empty_context())
+      updateTextInput(session, "biom_value", value = "")
+      updateTextAreaInput(session, "biom_notes", value = "")
+    }, error = function(e) {
+      output$biom_submit_status <- renderText(paste("Error:", e$message))
+    })
+  })
+
+  # --- New Measurement Type ---
+  data_type_choices <- reactive({
+    req(con())
+    dt <- DBI::dbGetQuery(con(),
+      "SELECT data_type_id, label FROM measurement_data_type ORDER BY label")
+    setNames(dt$data_type_id, dt$label)
+  })
+
+  output$biom_new_data_type_select <- renderUI({
+    selectizeInput(
+      inputId = "biom_new_data_type",
+      label   = "Data Type",
+      choices = c("None" = "", data_type_choices()),
+      options = list(placeholder = "Select data type...")
+    )
+  })
+
+  observeEvent(input$biom_new_save_btn, {
+    req(con())
+    tryCatch({
+      if (is.null(input$biom_new_name)  || input$biom_new_name  == "")
+        stop("Name is required.")
+      if (is.null(input$biom_new_label) || input$biom_new_label == "")
+        stop("Label is required.")
+      if (is.null(input$biom_new_prompt) || input$biom_new_prompt == "")
+        stop("Prompt is required.")
+      if (is.null(input$biom_new_data_type) || input$biom_new_data_type == "")
+        stop("Data type is required.")
+
+      blank_to_na <- function(x) {
+        if (is.null(x) || (is.character(x) && x == "")) NA_character_ else x
+      }
+
+      DBI::dbExecute(
+        con(),
+        "INSERT INTO measurement_type
+           (name, label, description, prompt, method, unit,
+            precision, min_value, max_value, data_type_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+        params = list(
+          input$biom_new_name,
+          input$biom_new_label,
+          blank_to_na(input$biom_new_description),
+          input$biom_new_prompt,
+          blank_to_na(input$biom_new_method),
+          blank_to_na(input$biom_new_unit),
+          as.integer(input$biom_new_precision),
+          as.numeric(input$biom_new_min),
+          as.numeric(input$biom_new_max),
+          input$biom_new_data_type
+        )
+      )
+
+      output$biom_new_status <- renderText("Measurement type added.")
+      measurement_type_refresh(measurement_type_refresh() + 1)
+
+      updateTextInput(session,     "biom_new_name",        value = "")
+      updateTextInput(session,     "biom_new_label",       value = "")
+      updateTextAreaInput(session, "biom_new_description", value = "")
+      updateTextAreaInput(session, "biom_new_prompt",      value = "")
+      updateTextInput(session,     "biom_new_method",      value = "")
+      updateTextInput(session,     "biom_new_unit",        value = "")
+      updateNumericInput(session,  "biom_new_precision",   value = NA)
+      updateNumericInput(session,  "biom_new_min",         value = NA)
+      updateNumericInput(session,  "biom_new_max",         value = NA)
+    }, error = function(e) {
+      output$biom_new_status <- renderText(paste("Error:", e$message))
+    })
+  })
+}

@@ -4,6 +4,14 @@
 #' already exist. The caller is responsible for opening and closing
 #' the connection.
 #'
+#' Tables created: \code{ingredients}, \code{meals}, \code{meal_ingredients},
+#' \code{users}, \code{plans}, \code{plan_meals}, \code{measurement_data_type},
+#' \code{measurement_type}, \code{measurements}, \code{measurement_context}.
+#'
+#' The \code{measurement_data_type} table is seeded from
+#' \code{data/measurement_data_types.csv}. The seed insert is idempotent
+#' (ON CONFLICT DO NOTHING), so existing rows are left untouched.
+#'
 #' @param con A DBIConnection object to a Postgres database.
 #'
 #' @return No return value, called for side effects.
@@ -105,6 +113,91 @@ initialise_db <- function(con) {
     )
   ")
 
+  DBI::dbExecute(con, "
+    CREATE TABLE IF NOT EXISTS measurement_data_type (
+      data_type_id    TEXT PRIMARY KEY,
+      label           TEXT NOT NULL,
+      description     TEXT,
+      base_type       TEXT NOT NULL,
+      possible_values JSONB,
+      ordered         BOOLEAN
+    )
+  ")
+
+  DBI::dbExecute(con, "
+    CREATE TABLE IF NOT EXISTS measurement_type (
+      measurement_type_id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      name                TEXT NOT NULL UNIQUE,
+      label               TEXT NOT NULL,
+      description         TEXT,
+      prompt              TEXT NOT NULL,
+      method              TEXT,
+      unit                TEXT,
+      precision           INTEGER,
+      min_value           REAL,
+      max_value           REAL,
+      data_type_id        TEXT NOT NULL
+                          REFERENCES measurement_data_type(data_type_id),
+      active              BOOLEAN NOT NULL DEFAULT TRUE
+    )
+  ")
+
+  DBI::dbExecute(con, "
+    CREATE TABLE IF NOT EXISTS measurements (
+      measurement_id      INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      user_id             INTEGER
+                          REFERENCES users(user_id) ON DELETE CASCADE,
+      measurement_type_id INTEGER NOT NULL
+                          REFERENCES measurement_type(measurement_type_id) ON DELETE CASCADE,
+      datetime            TIMESTAMPTZ NOT NULL,
+      value               TEXT NOT NULL,
+      notes               TEXT,
+      created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  ")
+
+  DBI::dbExecute(con, "
+    CREATE TABLE IF NOT EXISTS measurement_context (
+      measurement_context_id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      measurement_id         INTEGER NOT NULL
+                             REFERENCES measurements(measurement_id) ON DELETE CASCADE,
+      context_type           TEXT NOT NULL,
+      value                  TEXT NOT NULL,
+      UNIQUE (measurement_id, context_type)
+    )
+  ")
+
+  DBI::dbExecute(con, "
+    CREATE INDEX IF NOT EXISTS measurement_context_type_idx
+      ON measurement_context (context_type)
+  ")
+
+  seed_path <- "data/measurement_data_types.csv"
+  if (!file.exists(seed_path)) {
+    stop("Seed file not found: ", seed_path,
+         ". Expected to be readable relative to the working directory.",
+         call. = FALSE)
+  }
+  seed <- read.csv(seed_path,
+                   na.strings = c("", "NA"),
+                   stringsAsFactors = FALSE)
+
+  DBI::dbExecute(
+    con,
+    "INSERT INTO measurement_data_type
+       (data_type_id, label, description, base_type, possible_values, ordered)
+     VALUES ($1, $2, $3, $4, $5::jsonb, $6)
+     ON CONFLICT (data_type_id) DO NOTHING",
+    params = list(
+      as.character(seed$data_type_id),
+      as.character(seed$label),
+      as.character(seed$description),
+      as.character(seed$base_type),
+      as.character(seed$possible_values),
+      as.logical(seed$ordered)
+    )
+  )
+
   invisible(TRUE)
 }
 
@@ -139,6 +232,10 @@ drop_all_tables <- function(con, confirm = FALSE) {
   }
   DBI::dbExecute(con, "
     DROP TABLE IF EXISTS
+      measurement_context,
+      measurements,
+      measurement_type,
+      measurement_data_type,
       meal_ingredients,
       plan_meals,
       meals,
