@@ -16,6 +16,32 @@ library(knitr)
 library(kableExtra)
 ```
 
+<style>
+  /* Tip is only useful on screen */
+  .print-tip {
+    background: #eef6ff;
+    border-left: 4px solid #4a90e2;
+    padding: 0.5em 0.9em;
+    margin: 0 0 1em 0;
+    font-size: 0.9em;
+    color: #333;
+  }
+  @media print {
+    .print-tip { display: none; }
+    body { font-size: 11pt; }
+    h1 { page-break-before: auto; }
+    h3 { page-break-after: avoid; }
+    table { page-break-inside: avoid; }
+    a { color: inherit; text-decoration: none; }
+  }
+</style>
+
+<div class="print-tip">
+  <strong>Tip:</strong> to save this report as a PDF, press
+  <kbd>Ctrl</kbd>+<kbd>P</kbd> (or <kbd>⌘</kbd>+<kbd>P</kbd> on Mac) and
+  choose <em>Save as PDF</em> as the destination.
+</div>
+
 # Meal Plan — `r params$user_name`
 **Date:** `r format(params$report_date, "%d %B %Y")`
 

@@ -1,34 +1,14 @@
 #' Meal Planner Tab UI
 #'
-#' Returns the UI for the meal planner tab, including meal slots
-#' and daily summary and targets section.
-#'
-#' @return A shiny tabPanel object.
-#'
-#' @export
-meal_planner_ui <- function() {
-  tabPanel("Meal Planner",
-    br(),
-    uiOutput("meal_planner"),
-    hr(),
-    uiOutput("extra_ingredients"),
-    hr(),
-    uiOutput("daily_summary"),hr(),
-    downloadButton("download_report", "Download Report", class = "btn-info")
-  )
-}
-
-#' Meal Planner (beta) Tab UI
-#'
-#' Returns the UI for the search-and-add style meal planner tab.
-#' Meals and individual ingredients are searched, given a slot
-#' name / portions, and added to running tables.
+#' Returns the UI for the meal planner tab. Meals and individual
+#' ingredients are searched, given a slot name / portions, and
+#' added to running tables.
 #'
 #' @return A shiny tabPanel object.
 #'
 #' @export
 meal_planner_beta_ui <- function() {
-  tabPanel("Meal Planner (beta)",
+  tabPanel("Meal Planner",
     br(),
     h4("Add Meals"),
     fluidRow(
@@ -70,13 +50,10 @@ meal_planner_beta_ui <- function() {
     hr(),
     uiOutput("mpb_daily_summary"),
     hr(),
-    actionButton("mpb_view_report_btn", "View Report", class = "btn-info"),
-    tags$script(HTML(paste(
-      "Shiny.addCustomMessageHandler('mpb_open_report', function(url) {",
-      "  window.open(url, '_blank');",
-      "});",
-      sep = "\n"
-    )))
+    downloadButton("mpb_download_report",    "Download HTML", class = "btn-info"),
+    downloadButton("mpb_download_report_md", "Download Md",   class = "btn-info"),
+    helpText("Tip: open the HTML report and use Ctrl+P → Save as PDF to ",
+             "export a PDF.")
   )
 }
 

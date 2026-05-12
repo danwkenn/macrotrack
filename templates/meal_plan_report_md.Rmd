@@ -1,0 +1,60 @@
+---
+title: "Meal Plan Report"
+output:
+  md_document:
+    variant: gfm
+params:
+  user_name: "Unknown"
+  report_date: !r Sys.Date()
+  targets: NULL
+  pct_to_plan: 1.0
+  slots: NULL
+  meal_details: NULL
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+library(knitr)
+```
+
+# Meal Plan — `r params$user_name`
+**Date:** `r format(params$report_date, "%d %B %Y")`
+
+---
+
+## 1. Daily Summary & Targets
+
+```{r summary}
+kable(params$targets, format = "pipe")
+```
+
+---
+
+## 2. Plan
+
+```{r plan}
+kable(params$slots, format = "pipe",
+      col.names = c("Slot Name", "Meal", "Servings"))
+```
+
+---
+
+## 3. Meals
+
+```{r meals, results='asis'}
+for (i in seq_along(params$meal_details)) {
+  meal <- params$meal_details[[i]]
+
+  if (isTRUE(meal$is_additional)) {
+    cat("\n\n### Additional Ingredients\n\n")
+  } else {
+    cat(paste0("\n\n### Slot ", i, " — ", meal$slot_name, ": ", meal$meal_name,
+               " (", meal$servings, " serving(s))\n\n"))
+  }
+
+  print(kable(meal$ingredients, format = "pipe",
+              col.names = c("Ingredient", "Portions", "Calories",
+                            "Protein (g)", "Carbs (g)", "Fat (g)")))
+  cat("\n\n")
+}
+```
